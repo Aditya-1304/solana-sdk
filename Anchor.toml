@@ -1,0 +1,29 @@
+[workspace]
+members = [
+  "token-module",
+  "multisig-module",
+  "common-utils",
+]
+
+
+[toolchain]
+package_manager = "yarn"
+
+[features]
+resolution = true
+skip-lint = false
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[programs.localnet]
+token_module       = "DDnDEV5j1HkJzzV94sLaEi11e2CjXfTFRpQv1amgLxTr"
+multisig_module    = "8qzfg49CMM4u8UG6LaVhT4WuHC1CrgnrE8jYBzMFgvuZ"
+common_utils       = "Ai4JnBGB2qmd5LJFcSTKwwwEp2tBYfXLbAt4pC54dGh6"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
