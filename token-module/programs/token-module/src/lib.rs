@@ -186,6 +186,37 @@ pub struct CreateEscrow<'info> {
     pub rent: Sysvar<'info, Rent>,
 
 }
+#[derive(Accounts)]
+pub struct ReleaseEscrow<'info> {
+    #[account(mut)]
+    pub recipient: Signer<'info>,
+
+    #[account(
+        mut,
+        constraint = !escrow.claimed,
+    )]
+    pub escrow: Account<'info, Escrow>,
+
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    ///CHECK: This PDA owns the escrow token account
+    #[account(
+        seeds = [b"escrow_authority", escrow.key().as_ref()],
+        bump
+    )]
+    pub escrow_authority: AccountInfo<'info>,
+
+    #[account(
+        mut,
+        constraint = escrow_token_account.mint == mint.key(),
+        constraint = escrow_token_account.owner == escrow_authority.key()
+    )]
+    pub escrow_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+
 
 
 #[account]
