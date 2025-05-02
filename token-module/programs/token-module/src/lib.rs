@@ -216,7 +216,64 @@ pub struct ReleaseEscrow<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
+#[derive(Accounts)]
+pub struct FreezeTokenAccount<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
 
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = token_account.mint == mint.key()
+    )]
+    pub token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        seeds = [b"token_metadata", mint.key().as_ref()],
+        bump,
+        constraint = token_metadata.mint == mint.key()
+    )]
+    pub token_metadata: Account<'info, TokenMetadata>,
+
+    #[account(
+        seeds = [b"token_authority"],
+        bump = token_authority.bump,
+    )]
+    pub token_authority: Account<'info, TokenAuthority>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct ThawTokenAccount<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = token_account.mint == mint.key()
+    )]
+    pub token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        seeds = [b"token_metadata", mint.key().as_ref()],
+        bump,
+        constraint = token_metadata.mint == mint.key()
+    )]
+    pub token_metadata: Account<'info, TokenMetadata>,
+
+    #[account(
+        seeds = [b"token_authority"],
+        bump = token_authority.bump,
+    )]
+    pub token_authority: Account<'info, TokenAuthority>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+
+}
 
 
 #[account]
@@ -247,4 +304,22 @@ pub struct Escrow {
     pub claimed: bool,
     pub bump:u8,
 
+}
+
+#[error_code]
+pub enum TokenError {
+    #[msg("Unauthorized mint authority")]
+    UnauthorizedMintAuthority,
+
+    #[msg("Unauthorized freeze authority")]
+    UnauthorizedFreezeAuthority,
+
+    #[msg("Unauthorized recipient for escrow")]
+    UnauthorizedRecipient,
+
+    #[msg("Escrow has already been claimed")]
+    EscrowAlreadyClaimed,
+
+    #[msg("Mint would exceed max supply")]
+    ExceedsMaxSupply,
 }
