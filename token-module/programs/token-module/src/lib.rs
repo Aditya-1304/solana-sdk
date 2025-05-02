@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::{associated_token::AssociatedToken,  token_interface::{TokenAccount, TokenInterface, Mint, MintTo}};
+use anchor_spl::{associated_token::AssociatedToken,  token_interface::{TokenAccount, TokenInterface, Mint, MintTo, TransferChecked, Burn}};
 
 declare_id!("DDnDEV5j1HkJzzV94sLaEi11e2CjXfTFRpQv1amgLxTr");
 
@@ -106,6 +106,41 @@ pub mod token_module {
         ctx: Context<TransferTokens>,
         amount: u64,
     ) -> Result<()> {
+        token_interface::transfer_checked(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.from_account.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                    to: ctx.accounts.to_account.to_account_info(),
+                    authority: ctx.accounts.owner.to_account_info(),
+                },
+            ),
+            amount,
+            ctx.accounts.mint.decimals,
+        )?;
+
+        msg!("Transferred {} tokens from {} to {}", amount, ctx.accounts.from_account.key(), ctx.accounts.to_account.key());
+        Ok(())
+    }
+
+    pub fn burn_tokens(
+        ctx: Context<BurnTokens>,
+        amount: u64,
+    ) -> Result<()> {
+        token_interface::burn(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Burn {
+                    mint: ctx.accounts.mint.to_account_info(),
+                    from: ctx.accounts.token_account.to_account_info(),
+                    authority: ctx.accounts.owner.to_account_info(),
+                },
+            ),
+            amount
+        )?;
+
+        msg!("Burned {} tokens from {}", amount, ctx.accounts.token_account.key());
         Ok(())
     }
 
