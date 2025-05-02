@@ -144,6 +144,76 @@ pub mod token_module {
         Ok(())
     }
 
+    pub fn create_escrow(
+        ctx: Context<CreateEscrow>,
+        amount: u64,
+        seed: [u8; 32]
+    ) -> Result<()> {
+        let escrow = &mut ctx.accounts.escrow;
+        escrow.sender = ctx.accounts.sender.key();
+        escrow.mint = ctx.accounts.mint.key();
+        escrow.amount = amount;
+        escrow.seed = seed;
+        escrow.recipent = None;
+        escrow.claimed = false;
+        escrow.bump = ctx.bumps.escrow;
+
+        token_interface::transfer_checked(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.sender_token_account.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                    to: ctx.accounts.escrow_token_account.to_account_info(),
+                    authority: ctx.accounts.sender.to_account_info(),
+                },
+            ),
+            amount,
+            ctx.accounts.mint.decimals
+        )?;
+
+        msg!("Created escrow with {} tokens", amount);
+        Ok(())
+
+    }
+    pub fn release_escrow(ctx: Context<ReleaseEscrow>) -> Result<()> {
+        let escrow = &mut ctx.accounts.escrow;
+
+        if let Some(receipent) = escrow.recipent {
+            require!(
+                receipent == ctx.accounts.recipient.key(),
+                TokenError::UnauthorizedRecipient
+            );
+        }
+        require!(!escrow.claimed, TokenError::EscrowAlreadyClaimed);
+
+        escrow.claimed = true;
+
+        let escrow_seeds = &[
+            b"token_escrow",
+            escrow.sender.as_ref(),
+            escrow.mint.as_ref(),
+            &escrow.seed,
+            &[escrow.bump],
+        ];
+
+        token_interface::transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.escrow_token_account.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                    to: ctx.accounts.recipient_token_account.to_account_info(),
+                    authority: ctx.accounts.escrow_authority.to_account_info(),
+                }
+            ),
+            escrow.amount,
+            ctx.accounts.mint.decimals,
+        )?;
+
+        msg!("Released {} tokens from escrow to {}", escrow.amount, ctx.accounts.recipient.key());
+        Ok(())
+    }
 }
 
 
@@ -316,6 +386,15 @@ pub struct CreateEscrow<'info> {
     )]
     pub escrow_authority: AccountInfo<'info>,
 
+
+    #[account(
+        init,
+        payer = sender,
+        associated_token::mint = mint,
+        associated_token::authority = escrow_authority
+    )]
+    pub escrow_token_account: InterfaceAccount<'info, TokenAccount>,
+
     pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
@@ -348,6 +427,13 @@ pub struct ReleaseEscrow<'info> {
         constraint = escrow_token_account.owner == escrow_authority.key()
     )]
     pub escrow_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = recipient_token_account.mint == mint.key(),
+        constraint = recipient_token_account.owner == recipient.key()
+    )]
+    pub recipient_token_account: InterfaceAccount<'info, TokenAccount>,
 
     pub token_program: Interface<'info, TokenInterface>,
 }
