@@ -1,17 +1,118 @@
 use anchor_lang::prelude::*;
-use anchor_spl::{associated_token::AssociatedToken, token::Mint, token_interface::{TokenAccount, TokenInterface}};
+use anchor_spl::{associated_token::AssociatedToken,  token_interface::{TokenAccount, TokenInterface, Mint, MintTo}};
 
 declare_id!("DDnDEV5j1HkJzzV94sLaEi11e2CjXfTFRpQv1amgLxTr");
 
 #[program]
 pub mod token_module {
+    use anchor_lang::system_program;
+    use anchor_spl::token_interface;
+
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        msg!("Greetings from: {:?}", ctx.program_id);
+    pub fn initialize_token_authority(ctx: Context<InitializeTokenAuthority>) -> Result<()> {
+
+        let authority = &mut ctx.accounts.token_authority;
+        authority.admin = ctx.accounts.admin.key();
+        authority.bump = ctx.bumps.token_authority;
+        msg!("Token authority initialized with admin: {}", authority.admin);
         Ok(())
     }
+
+    pub fn create_token(
+        ctx: Context<CreateToken>,
+        name: String,
+        symbol: String,
+        decimals: u8,
+        uri: Option<String>,
+        max_supply: Option<u64>,
+    ) -> Result<()> {
+        let token_metadata = &mut ctx.accounts.token_metadata;
+        token_metadata.name = name.clone();
+        token_metadata.symbol = symbol.clone();
+        token_metadata.decimals = decimals;
+        token_metadata.uri = uri;
+        token_metadata.max_supply = max_supply;
+        token_metadata.admin = ctx.accounts.admin.key();
+        token_metadata.mint = ctx.accounts.mint.key();
+        token_metadata.bump = ctx.bumps.token_metadata;
+
+        msg!("Created new token {} ({})", name, symbol);
+        Ok(())
+    }
+
+    pub fn transfer_sol(ctx: Context<TransferSol>, amount: u64) -> Result<()> {
+        msg!("Transferring {} lamports from {} to {}", amount, ctx.accounts.from.key(), ctx.accounts.to.key());
+
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.from.to_account_info(),
+                    to: ctx.accounts.to.to_account_info(),
+                },
+            ),
+            amount
+        )?;
+
+        msg!("SOL transfer successful");
+        Ok(())
+    }
+
+    pub fn mint_tokens(
+        ctx: Context<MintTokens>,
+        amount: u64,
+    ) -> Result<()> {
+
+        if let Some(max_supply) = ctx.accounts.token_metadata.max_supply {
+            let current_supply = ctx.accounts.mint.supply;
+            require!(
+                current_supply.checked_add(amount).unwrap() <= max_supply,
+                TokenError::ExceedsMaxSupply
+            );
+        }
+
+        require!(
+            ctx.accounts.admin.key() == ctx.accounts.token_metadata.admin || ctx.accounts.admin.key() == ctx.accounts.token_authority.admin,
+            TokenError::UnauthorizedMintAuthority
+        );
+
+        let mint_key = ctx.accounts.mint.key();
+        let authority_seeds = &[
+            b"token_authority",
+            mint_key.as_ref(),
+            &[ctx.accounts.token_authority.bump]
+        ];
+
+        token_interface::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                MintTo {
+                    mint: ctx.accounts.mint.to_account_info(),
+                    to: ctx.accounts.destination.to_account_info(),
+                    authority: ctx.accounts.token_authority.to_account_info()
+                },
+                &[authority_seeds]
+
+            ),
+            amount
+        )?;
+
+        msg!("Minted {} tokens to {}", amount, ctx.accounts.destination.key());
+        Ok(())
+    }
+
+    pub fn transfer_tokens(
+        ctx: Context<TransferTokens>,
+        amount: u64,
+    ) -> Result<()> {
+        Ok(())
+    }
+
 }
+
+
+
 #[derive(Accounts)]
 pub struct InitializeTokenAuthority<'info> {
     #[account(mut)]
