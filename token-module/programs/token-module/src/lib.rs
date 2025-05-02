@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::{token::Mint, token_interface::TokenInterface};
+use anchor_spl::{token::Mint, token_interface::{TokenAccount, TokenInterface}};
 
 declare_id!("DDnDEV5j1HkJzzV94sLaEi11e2CjXfTFRpQv1amgLxTr");
 
@@ -79,8 +79,57 @@ pub struct TransferSol<'info> {
 }
 
 #[derive(Accounts)]
+pub struct MintTokens<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(
+        mut
+    )]
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    #[account(mut)]
+    pub destination: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        seeds = [b"token_metadata", mint.key().as_ref()],
+        bump,
+        constraint = token_metadata.mint == mint.key()
+    )]
+    pub token_metadata: Account<'info, TokenMetadata>, 
+
+    #[account(
+        seeds = [b"token_authority"],
+        bump = token_authority.bump,
+    )]
+    pub token_authority: Account<'info, TokenAuthority>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
 
 
+#[derive(Accounts)]
+pub struct TransferTokens<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    pub mint: InterfaceAccount<'info, Mint>,
+    
+    #[account(
+        mut,
+        constraint = from_account.mint == mint.key(),
+        constraint = from_account.owner == owner.key(),
+    )]
+    pub from_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = to_account.mint == mint.key()
+    )]
+    pub to_account: InterfaceAccount<'info, TokenAccount>,
+
+    pub token_program: Interface<'info, TokenInterface>
+}
 
 
 
