@@ -1,12 +1,14 @@
 use anchor_lang::prelude::*;
-use anchor_spl::{associated_token::AssociatedToken,  token_interface::{TokenAccount, TokenInterface, Mint, MintTo, TransferChecked, Burn}};
+use anchor_spl::{associated_token::AssociatedToken,  token_interface::{self, TokenAccount, TokenInterface, Mint, MintTo, TransferChecked, Burn, FreezeAccount, ThawAccount}};
+use anchor_lang::system_program;
 
 declare_id!("DDnDEV5j1HkJzzV94sLaEi11e2CjXfTFRpQv1amgLxTr");
 
 #[program]
 pub mod token_module {
-    use anchor_lang::system_program;
-    use anchor_spl::token_interface;
+    
+
+    
 
     use super::*;
 
@@ -212,6 +214,64 @@ pub mod token_module {
         )?;
 
         msg!("Released {} tokens from escrow to {}", escrow.amount, ctx.accounts.recipient.key());
+        Ok(())
+    }
+
+    pub fn freeze_token_account(ctx: Context<FreezeTokenAccount>) -> Result<()> {
+        require!(
+            ctx.accounts.admin.key() == ctx.accounts.token_metadata.admin,
+            TokenError::UnauthorizedFreezeAuthority
+        );
+
+        let mint_key = ctx.accounts.mint.key();
+        let authority_seeds = &[
+            b"token_authority",
+            mint_key.as_ref(),
+            &[ctx.accounts.token_authority.bump]
+        ];
+
+        token_interface::freeze_account(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                FreezeAccount {
+                    account: ctx.accounts.token_account.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                    authority: ctx.accounts.token_authority.to_account_info(),
+                },
+                &[authority_seeds]
+            )
+        )?;
+
+        msg!("Frozen token account {}", ctx.accounts.token_account.key());
+        Ok(())
+    }
+
+    pub fn thaw_token_account(ctx: Context<ThawTokenAccount>) -> Result<()> {
+        require!(
+            ctx.accounts.admin.key() == ctx.accounts.token_metadata.admin,
+            TokenError::UnauthorizedFreezeAuthority
+        );
+
+        let mint_key = ctx.accounts.mint.key();
+        let authority_seeds = &[
+            b"token_authority",
+            mint_key.as_ref(),
+            &[ctx.accounts.token_authority.bump]
+        ];
+
+        token_interface::thaw_account(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                ThawAccount {
+                    account: ctx.accounts.token_account.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                    authority: ctx.accounts.token_authority.to_account_info(),
+                },
+                &[authority_seeds]
+            )
+        )?;
+
+        msg!("Thawed token account {}", ctx.accounts.token_account.key());
         Ok(())
     }
 }
