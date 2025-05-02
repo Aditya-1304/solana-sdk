@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::{token::Mint, token_interface::{TokenAccount, TokenInterface}};
+use anchor_spl::{associated_token::AssociatedToken, token::Mint, token_interface::{TokenAccount, TokenInterface}};
 
 declare_id!("DDnDEV5j1HkJzzV94sLaEi11e2CjXfTFRpQv1amgLxTr");
 
@@ -131,6 +131,61 @@ pub struct TransferTokens<'info> {
     pub token_program: Interface<'info, TokenInterface>
 }
 
+#[derive(Accounts)]
+pub struct BurnTokens<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    #[account(mut)]
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        mut, 
+        constraint = token_account.mint == mint.key(),
+        constraint = token_account.owner == owner.key()
+    )]
+    pub token_account: InterfaceAccount<'info, TokenAccount>,
+
+    pub token_program: Interface<'info, TokenInterface>
+}
+
+#[derive(Accounts)]
+#[instruction(amount: u64, seed: [u8; 32])]
+pub struct CreateEscrow<'info> {
+    #[account(mut)]
+    pub sender: Signer<'info>,
+
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = sender_token_account.mint == mint.key(),
+        constraint = sender_token_account.owner == sender.key()
+    )]
+    pub sender_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        init,
+        payer = sender,
+        space = 8 + 32 + 32 + 8 + 32 + 1 + 1 + 1, // Discriminator + keys + amount + seed + option<pubkey> + claimed + bump
+        seeds = [b"token_escrow", sender.key().as_ref(), mint.key().as_ref(), &seed],
+        bump
+    )]
+    pub escrow: Account<'info, Escrow>,
+
+    ///CHECK: This is a PDA that will own the escrow token account
+    #[account(
+        seeds = [b"escrow_authority", escrow.key().as_ref()],
+        bump
+    )]
+    pub escrow_authority: AccountInfo<'info>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+
+}
 
 
 #[account]
