@@ -226,7 +226,230 @@ describe("token-module", () => {
 
       assert.isTrue(user1AtaInfoAfter.amount === expectedUser1Balance);
       assert.isTrue(mintInfoAfter.supply === expectedMintSupply)
-    })
+    });
 
+    it("6. Freeze and Thaw Token Account", async () => {
+      const user1Ata = getAssociatedTokenAddressSync(mintKeypair.publicKey, user1Keypair.publicKey, false, TOKEN_PROGRAM_ID);
+
+      await program.methods
+        .freezeTokenAccount()
+        .accounts({
+          admin: adminKeypair.publicKey,
+          mint: mintKeypair.publicKey,
+          tokenAccount: user1Ata,
+          tokenMetadata: tokenMetadataPDA,
+          tokenAuthority: tokenAuthorityPDA,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .signers([adminKeypair])
+        .rpc({ commitment: "confirmed" });
+
+      let user1AtaInfo = await getAccount(provider.connection, user1Ata, "confirmed", TOKEN_PROGRAM_ID)
+      assert.isTrue(user1AtaInfo.isFrozen);
+
+      const user2ATa = getAssociatedTokenAddressSync(mintKeypair.publicKey, user2Keypair.publicKey, false, TOKEN_PROGRAM_ID);
+      const transferAmount = new BN(1);
+
+      try {
+        await program.methods
+          .transferTokens(transferAmount)
+          .accounts({
+            owner: user1Keypair.publicKey,
+            mint: mintKeypair.publicKey,
+            fromAccount: user1Ata,
+            toAccount: user2ATa,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([user1Keypair])
+          .rpc({ commitment: "confirmed" })
+        assert.fail("Transfer from frozen account should have failed");
+      } catch (error) {
+        expect(error.message).to.include("AccountFrozen");
+      }
+
+      await program.methods
+        .thawTokenAccount()
+        .accounts({
+          admin: adminKeypair.publicKey,
+          mint: mintKeypair.publicKey,
+          tokenAccount: user1Ata,
+          tokenMetadata: tokenMetadataPDA,
+          tokenAuthority: tokenAuthorityPDA,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .signers([adminKeypair])
+        .rpc({ commitment: "confirmed" })
+      user1AtaInfo = await getAccount(provider.connection, user1Ata, "confirmed", TOKEN_PROGRAM_ID);
+      assert.isFalse(user1AtaInfo.isFrozen);
+
+    })
+  });
+  describe("Escrow Operstions", () => {
+    const escrowMintKeypair = Keypair.generate();
+    let escrowTokenMetadataPDA: PublicKey;
+    const escrowSeed = Keypair.generate().publicKey.toBuffer();
+
+    let escrowPDA: PublicKey;
+    let escrowAuthorityPDA: PublicKey;
+    let escrowTokenAccount: PublicKey;
+
+    const escrowAmount = new BN(50).mul(new BN(10).pow(new BN(TOKEN_DECIMALS)));
+
+    before(async () => {
+      const escrowTokenMetadataResult = findPda(
+        [Buffer.from("token_metadata"), escrowMintKeypair.publicKey.toBuffer()],
+        program.programId
+      );
+      escrowTokenMetadataPDA = escrowTokenMetadataResult.publicKey;
+
+      await program.methods
+        .createToken("Escrow Token", "ESC", TOKEN_DECIMALS, null, null)
+        .accounts({
+          admin: adminKeypair.publicKey,
+          mint: escrowMintKeypair.publicKey,
+          tokenMetadata: escrowTokenMetadataPDA,
+          tokenAuthority: tokenAuthorityPDA,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        } as any)
+        .signers([adminKeypair, escrowMintKeypair])
+        .rpc({ commitment: "confirmed" })
+
+      const user1EscrowAta = getAssociatedTokenAddressSync(escrowMintKeypair.publicKey, user1Keypair.publicKey, false, TOKEN_PROGRAM_ID);
+
+      const createAtaTx = new Transaction().add(
+        createAssociatedTokenAccountInstruction(
+          user1Keypair.publicKey, user1EscrowAta, user1Keypair.publicKey, escrowMintKeypair.publicKey, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+        )
+      );
+      await provider.sendAndConfirm(createAtaTx, [user1Keypair], { commitment: "confirmed" });
+
+      const initialMintAmount = new BN(200).mul(new BN(10).pow(new BN(TOKEN_DECIMALS)))
+      await program.methods
+        .mintTokens(initialMintAmount)
+        .accounts({
+          admin: adminKeypair.publicKey,
+          mint: escrowMintKeypair.publicKey,
+          destination: user1EscrowAta,
+          tokenMetadata: escrowTokenMetadataPDA,
+          tokenAuthority: tokenAuthorityPDA,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .signers([adminKeypair])
+        .rpc({ commitment: "confirmed" })
+
+      const escrowPdaResut = findPda(
+        [
+          Buffer.from("token_escrow"),
+          user1Keypair.publicKey.toBuffer(),
+          escrowMintKeypair.publicKey.toBuffer(),
+          escrowSeed,
+        ],
+        program.programId
+      );
+      escrowPDA = escrowPdaResut.publicKey;
+
+      const escrowAuthorityPdaResult = findPda(
+        [Buffer.from("escrow_authority"), escrowPDA.toBuffer()],
+        program.programId,
+      );
+      escrowAuthorityPDA = escrowAuthorityPdaResult.publicKey;
+
+      escrowTokenAccount = getAssociatedTokenAddressSync(
+        escrowMintKeypair.publicKey,
+        escrowAuthorityPDA,
+        true,
+        TOKEN_PROGRAM_ID
+      );
+    });
+
+    it("7. Create Escrow (with specific recipient)", async () => {
+      const user1EscrowAta = getAssociatedTokenAddressSync(
+        escrowMintKeypair.publicKey,
+        user1Keypair.publicKey,
+        false,
+        TOKEN_PROGRAM_ID
+      )
+      await program.methods
+        .createEscrow(escrowAmount, Array.from(escrowSeed), user2Keypair.publicKey)
+        .accounts({
+          sender: user1Keypair.publicKey,
+          mint: escrowMintKeypair.publicKey,
+          senderTokenAccount: user1EscrowAta,
+          escrow: escrowPDA,
+          escrowAuthority: escrowAuthorityPDA,
+          escrowTokenAccount: escrowTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY
+        } as any)
+        .signers([user1Keypair])
+        .rpc({ commitment: "confirmed" });
+
+      const escrowAccountData = await program.account.escrow.fetch(escrowPDA);
+      assert.isTrue(escrowAccountData.sender.equals(user1Keypair.publicKey));
+      assert.isTrue(escrowAccountData.mint.equals(escrowMintKeypair.publicKey));
+      assert.isTrue(escrowAccountData.amount.eq(escrowAmount));
+      assert.isTrue(escrowAccountData.recipient?.equals(user2Keypair.publicKey));
+      assert.isFalse(escrowAccountData.claimed);
+
+      const escrowAtaInfo = await getAccount(provider.connection, escrowTokenAccount, 'confirmed', TOKEN_PROGRAM_ID);
+      assert.isTrue(escrowAtaInfo.amount === BigInt(escrowAmount.toString()));
+
+    });
+
+    it("8. Release Escrow (to Specific recipient)", async () => {
+      const user2EscrowAta = getAssociatedTokenAddressSync(
+        escrowMintKeypair.publicKey, user2Keypair.publicKey, false, TOKEN_PROGRAM_ID
+      );
+
+      const user2InitialBalance = (await provider.connection.getAccountInfo(user2EscrowAta)) ? (await getAccount(provider.connection, user2EscrowAta)).amount : BigInt(0);
+
+      await program.methods
+        .releaseEscrow()
+        .accounts({
+          recipient: user2Keypair.publicKey,
+          escrow: escrowPDA,
+          mint: escrowMintKeypair.publicKey,
+          escrowAuthority: escrowAuthorityPDA,
+          escrowTokenAccount: escrowTokenAccount,
+          recipientTokenAccount: user2EscrowAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([user2Keypair])
+        .rpc({ commitment: "confirmed" });
+
+      const user2AtaInfoAfter = await getAccount(provider.connection, user2EscrowAta, "confirmed", TOKEN_PROGRAM_ID)
+      const expectedUser2Balance = BigInt(user2InitialBalance.toString()) + BigInt(escrowAmount.toString());
+      assert.isTrue(user2AtaInfoAfter.amount === expectedUser2Balance);
+
+      const escrowAccountInfo = await provider.connection.getAccountInfo(escrowPDA);
+      assert.isNull(escrowAccountInfo, "Escroe account should be closed")
+    });
+
+
+  })
+
+  it("9. Tranfer SOL", async () => {
+    const amountToTransfer = new BN(1 * LAMPORTS_PER_SOL);
+    const user1InitialLamports = await provider.connection.getBalance(user1Keypair.publicKey);
+    const user2InitialLamports = await provider.connection.getBalance(user2Keypair.publicKey);
+
+    await program.methods
+      .transferSol(amountToTransfer)
+      .accounts({
+        from: user1Keypair.publicKey,
+        to: user2Keypair.publicKey,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([user1Keypair])
+      .rpc({ commitment: "confirmed" })
+
+    const user1AfterLamports = await provider.connection.getBalance(user1Keypair.publicKey);
+    const user2AfterLmaports = await provider.connection.getBalance(user2Keypair.publicKey)
   })
 })
