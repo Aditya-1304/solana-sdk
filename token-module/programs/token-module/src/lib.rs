@@ -96,14 +96,19 @@ pub mod token_module {
         }
 
         require!(
-            ctx.accounts.admin.key() == ctx.accounts.token_metadata.admin || ctx.accounts.admin.key() == ctx.accounts.token_authority.admin,
+            ctx.accounts.admin.key() == ctx.accounts.token_metadata.admin,
             TokenError::UnauthorizedMintAuthority
         );
 
+        msg!("Token Authority PDA for minting: {}", ctx.accounts.token_authority.key());
+        msg!("Token Authority Bump for minting: {}", ctx.accounts.token_authority.bump);
+        msg!("Mint account for minting: {}", ctx.accounts.mint.key());
+        msg!("Mint authority according to mint account: {}", ctx.accounts.mint.mint_authority.unwrap());
+
+
         let mint_key = ctx.accounts.mint.key();
         let authority_seeds = &[
-            b"token_authority",
-            mint_key.as_ref(),
+            b"token_authority".as_ref(),
             &[ctx.accounts.token_authority.bump]
         ];
 
@@ -194,14 +199,15 @@ pub mod token_module {
     pub fn create_escrow(
         ctx: Context<CreateEscrow>,
         amount: u64,
-        seed: [u8; 32]
+        seed: [u8; 32],
+        recipient: Option<Pubkey>,
     ) -> Result<()> {
         let escrow = &mut ctx.accounts.escrow;
         escrow.sender = ctx.accounts.sender.key();
         escrow.mint = ctx.accounts.mint.key();
         escrow.amount = amount;
         escrow.seed = seed;
-        escrow.recipient = None;
+        escrow.recipient = recipient;
         escrow.claimed = false;
         escrow.bump = ctx.bumps.escrow;
 
@@ -220,11 +226,11 @@ pub mod token_module {
         )?;
 
         emit!(EscrowCreated {
-            escrow: ctx.accounts.escrow.key(),
+            escrow: escrow.key(),
             sender: ctx.accounts.sender.key(),
             mint: ctx.accounts.mint.key(),
             amount,
-            recipient: None,
+            recipient: escrow.recipient,
         });
 
         msg!("Created escrow with {} tokens", amount);
@@ -240,10 +246,9 @@ pub mod token_module {
                 TokenError::UnauthorizedRecipient
             );
         }
-        if escrow.recipient.is_none() {
+        else {
             require!(
-                escrow.sender == ctx.accounts.recipient.key() || 
-                false,
+                escrow.sender == ctx.accounts.recipient.key(),
                 TokenError::UnauthorizedRecipient
             )
         }
@@ -251,13 +256,12 @@ pub mod token_module {
 
         escrow.claimed = true;
 
-        let escrow_seeds = &[
-            b"token_escrow",
-            escrow.sender.as_ref(),
-            escrow.mint.as_ref(),
-            &escrow.seed,
-            &[escrow.bump],
-        ];
+        let escrow_key = escrow.key();
+        let escrow_authority_seeds = &[
+                b"escrow_authority".as_ref(),
+                escrow_key.as_ref(),
+                &[ctx.bumps.escrow_authority],
+            ];
 
         token_interface::transfer_checked(
             CpiContext::new_with_signer(
@@ -268,7 +272,7 @@ pub mod token_module {
                     to: ctx.accounts.recipient_token_account.to_account_info(),
                     authority: ctx.accounts.escrow_authority.to_account_info(),
                 },
-                &[escrow_seeds]
+                &[escrow_authority_seeds]
             ),
             escrow.amount,
             ctx.accounts.mint.decimals,
@@ -293,8 +297,7 @@ pub mod token_module {
 
         let mint_key = ctx.accounts.mint.key();
         let authority_seeds = &[
-            b"token_authority",
-            mint_key.as_ref(),
+            b"token_authority".as_ref(),
             &[ctx.accounts.token_authority.bump]
         ];
 
@@ -328,8 +331,7 @@ pub mod token_module {
 
         let mint_key = ctx.accounts.mint.key();
         let authority_seeds = &[
-            b"token_authority",
-            mint_key.as_ref(),
+            b"token_authority".as_ref(),
             &[ctx.accounts.token_authority.bump]
         ];
 
@@ -367,8 +369,8 @@ pub struct InitializeTokenAuthority<'info> {
     #[account(
         init,
         payer = admin,
-        space = 8 + 32 + 1,
-        seeds = [b"token_authority"],
+        space = 8 + TokenAuthority::INIT_SPACE,
+        seeds = [b"token_authority".as_ref()],
         bump,
     )]
     pub token_authority: Account<'info, TokenAuthority>,
@@ -410,7 +412,7 @@ pub struct CreateToken<'info> {
 
     ///CHECK: This is the token autority PDA
     #[account(
-        seeds = [b"token_authority"],
+        seeds = [b"token_authority".as_ref()],
         bump
     )]
     pub token_authority: Account<'info, TokenAuthority>,
@@ -447,14 +449,14 @@ pub struct MintTokens<'info> {
     pub destination: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        seeds = [b"token_metadata", mint.key().as_ref()],
+        seeds = [b"token_metadata".as_ref(), mint.key().as_ref()],
         bump,
         constraint = token_metadata.mint == mint.key()
     )]
     pub token_metadata: Account<'info, TokenMetadata>, 
 
     #[account(
-        seeds = [b"token_authority"],
+        seeds = [b"token_authority".as_ref()],
         bump = token_authority.bump,
     )]
     pub token_authority: Account<'info, TokenAuthority>,
@@ -505,7 +507,7 @@ pub struct BurnTokens<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(amount: u64, seed: [u8; 32])]
+#[instruction(amount: u64, seed: [u8; 32], receipient: Option<Pubkey>)]
 pub struct CreateEscrow<'info> {
     #[account(mut)]
     pub sender: Signer<'info>,
@@ -522,8 +524,8 @@ pub struct CreateEscrow<'info> {
     #[account(
         init,
         payer = sender,
-        space = 8 + 32 + 32 + 8 + 32 + 1 + 1 + 1, // Discriminator + keys + amount + seed + option<pubkey> + claimed + bump
-        seeds = [b"token_escrow", sender.key().as_ref(), mint.key().as_ref(), &seed],
+        space = 8 + 32 + 32 + 8 + 32 + (1+32) + 1 + 1, // Discriminator + keys + amount + seed + option<pubkey> + claimed + bump
+        seeds = [b"token_escrow".as_ref(), sender.key().as_ref(), mint.key().as_ref(), &seed],
         bump
     )]
     pub escrow: Account<'info, Escrow>,
@@ -579,13 +581,17 @@ pub struct ReleaseEscrow<'info> {
     pub escrow_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        mut,
+        init_if_needed,
+        payer = recipient,
+        associated_token::mint = mint,
+        associated_token::authority = recipient,
         constraint = recipient_token_account.mint == mint.key(),
-        constraint = recipient_token_account.owner == recipient.key()
+        // constraint = recipient_token_account.owner == recipient.key()
     )]
     pub recipient_token_account: InterfaceAccount<'info, TokenAccount>,
 
     pub token_program: Interface<'info, TokenInterface>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
 
     pub system_program: Program<'info, System>,
 }
@@ -604,14 +610,14 @@ pub struct FreezeTokenAccount<'info> {
     pub token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        seeds = [b"token_metadata", mint.key().as_ref()],
-        bump,
+        seeds = [b"token_metadata".as_ref(), mint.key().as_ref()],
+        bump = token_metadata.bump,
         constraint = token_metadata.mint == mint.key()
     )]
     pub token_metadata: Account<'info, TokenMetadata>,
 
     #[account(
-        seeds = [b"token_authority"],
+        seeds = [b"token_authority".as_ref()],
         bump = token_authority.bump,
     )]
     pub token_authority: Account<'info, TokenAuthority>,
@@ -633,14 +639,14 @@ pub struct ThawTokenAccount<'info> {
     pub token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        seeds = [b"token_metadata", mint.key().as_ref()],
+        seeds = [b"token_metadata".as_ref(), mint.key().as_ref()],
         bump,
         constraint = token_metadata.mint == mint.key()
     )]
     pub token_metadata: Account<'info, TokenMetadata>,
 
     #[account(
-        seeds = [b"token_authority"],
+        seeds = [b"token_authority".as_ref()],
         bump = token_authority.bump,
     )]
     pub token_authority: Account<'info, TokenAuthority>,
@@ -651,16 +657,21 @@ pub struct ThawTokenAccount<'info> {
 
 
 #[account]
+#[derive(InitSpace)]
 pub struct TokenAuthority {
     pub admin: Pubkey,
     pub bump: u8,
 }
 
 #[account]
+#[derive(InitSpace)]
 pub struct TokenMetadata {
+    #[max_len(32)]
     pub name: String,
+    #[max_len(10)]
     pub symbol: String,
     pub decimals: u8,
+    #[max_len(200)]
     pub uri: Option<String>,
     pub max_supply: Option<u64>,
     pub admin: Pubkey,
@@ -669,6 +680,7 @@ pub struct TokenMetadata {
 }
 
 #[account]
+#[derive(InitSpace)]
 pub struct Escrow {
     pub sender: Pubkey,
     pub mint: Pubkey,
