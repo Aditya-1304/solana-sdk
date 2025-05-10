@@ -237,6 +237,111 @@ describe("token-module", () => {
 
 
   describe("3. Mint Tokens", async () => {
+    const mintKeypair = Keypair.generate();
+    let tokenMetadataPDA: PublicKey;
+    const mintAmount = new BN(100).mul(new BN(10).pow(new BN(TOKEN_DECIMALS)));
+
+    before(async () => {
+      const tokenMetadataResult = findPda([Buffer.from("token_metadata"), mintKeypair.publicKey.toBuffer()], program.programId);
+      tokenMetadataPDA = tokenMetadataResult.publicKey;
+      await program.methods
+        .createToken("Mint Test Token", "MTT", TOKEN_DECIMALS, null, new BN(1000 * 10 ** TOKEN_DECIMALS)) // Max supply 1000
+        .accounts({
+          admin: adminKeypair.publicKey,
+          mint: mintKeypair.publicKey,
+          tokenMetadata: tokenMetadataPDA,
+          tokenAuthority: tokenAuthorityPDA, tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId, rent: SYSVAR_RENT_PUBKEY,
+        } as any)
+        .signers([adminKeypair, mintKeypair])
+        .rpc({ commitment: "confirmed" });
+    });
+    it("Should mint tokens successfully", async () => {
+      const user1Ata = getAssociatedTokenAddressSync(mintKeypair.publicKey, user1Keypair.publicKey);
+      const createAtaTx = new Transaction()
+        .add(createAssociatedTokenAccountInstruction(
+          user1Keypair.publicKey,
+          user1Ata,
+          user1Keypair.publicKey,
+          mintKeypair.publicKey
+        ))
+      await provider.sendAndConfirm(createAtaTx, [user1Keypair], { commitment: "confirmed" });
+
+      await program.methods
+        .mintTokens(mintAmount)
+        .accounts({
+          admin: adminKeypair.publicKey,
+          mint: mintKeypair.publicKey,
+          destination: user1Ata,
+          tokenMetadata: tokenMetadataPDA,
+          tokenAuthority: tokenAuthorityPDA,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .signers([adminKeypair])
+        .rpc({ commitment: "confirmed" });
+
+      const user1AtaInfo = await getAccount(provider.connection, user1Ata);
+      assert.isTrue(user1AtaInfo.amount === BigInt(mintAmount.toString()));
+    });
+
+    it("should fail to mint zero tokens", async () => {
+      const user1Ata = getAssociatedTokenAddressSync(mintKeypair.publicKey, user1Keypair.publicKey);
+      await expectAnchorError(
+        program.methods
+          .mintTokens(new BN(0))
+          .accounts({
+            admin: adminKeypair.publicKey,
+            mint: mintKeypair.publicKey,
+            destination: user1Ata,
+            tokenMetadata: tokenMetadataPDA,
+            tokenAuthority: tokenAuthorityPDA,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          } as any)
+          .signers([adminKeypair])
+          .rpc(),
+        "MintAmountZero",
+      )
+    });
+
+    it("Should fail to mint if admin is not token_metadata.admin", async () => {
+      const user1Ata = getAssociatedTokenAddressSync(mintKeypair.publicKey, user1Keypair.publicKey);
+      await expectAnchorError(
+        program.methods
+          .mintTokens(mintAmount)
+          .accounts({
+            admin: unauthorizedUserKeypair.publicKey, // Wrong admin
+            mint: mintKeypair.publicKey, destination: user1Ata,
+            tokenMetadata: tokenMetadataPDA, tokenAuthority: tokenAuthorityPDA, tokenProgram: TOKEN_PROGRAM_ID,
+          } as any)
+          .signers([unauthorizedUserKeypair])
+          .rpc(),
+        "UnauthorizedMintAuthority" // This comes from the `require` in `mint_tokens`
+      );
+    });
+
+    it("Should fail to mint if it exceeds max supply", async () => {
+      const user1Ata = getAssociatedTokenAddressSync(mintKeypair.publicKey, user1Keypair.publicKey);
+      const currentSupply = (await getMint(provider.connection, mintKeypair.publicKey)).supply;
+      const tokenMetadata = await program.account.tokenMetadata.fetch(tokenMetadataPDA);
+      const maxSupply = tokenMetadata.maxSupply;
+      const amountToExceed = maxSupply.sub(new BN(currentSupply.toString())).add(new BN(1)); // 1 more than remaining
+
+      if (amountToExceed.gtn(0)) { // Only run if there's a max supply and we can exceed it
+        await expectAnchorError(
+          program.methods
+            .mintTokens(amountToExceed)
+            .accounts({
+              admin: adminKeypair.publicKey, mint: mintKeypair.publicKey, destination: user1Ata,
+              tokenMetadata: tokenMetadataPDA, tokenAuthority: tokenAuthorityPDA, tokenProgram: TOKEN_PROGRAM_ID,
+            } as any)
+            .signers([adminKeypair])
+            .rpc(),
+          "ExceedsMaxSupply"
+        );
+      } else {
+        console.log("Skipping exceed max supply test as current supply might already be at max or no max_supply set.");
+      }
+    });
 
   });
 
