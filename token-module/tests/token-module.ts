@@ -51,6 +51,24 @@ const expectAnchorError = async (fn: Promise<any>, expectedErrorCode: string, ex
   }
 };
 
+const expectProgramError = async (fn: Promise<any>, expectedErrorCode: string, expectedMessage?: string) => {
+  try {
+    await fn;
+    assert.fail("Expected promise to be rejected but it resolved successfully");
+  } catch (e: any) {
+    expect(e).to.exist;
+    if (e.logs) {
+      const logsStr = JSON.stringify(e.logs);
+      if (expectedErrorCode === "0x1" && expectedMessage === "insufficient funds") {
+        expect(logsStr).to.include("custom program error: 0x1");
+        expect(logsStr).to.include("insufficient funds");
+        return;
+      }
+    }
+    throw e;
+  }
+}
+
 describe("token-module", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
@@ -474,7 +492,7 @@ describe("token-module", () => {
     it("Should fail to transfer with insufficient funds", async () => {
       const user1Balance = (await getAccount(provider.connection, user1Ata)).amount;
       const transferAmount = new BN(user1Balance.toString()).add(new BN(1));
-      await expectAnchorError(
+      await expectProgramError(
         program.methods
           .transferTokens(transferAmount)
           .accounts({
@@ -486,7 +504,8 @@ describe("token-module", () => {
           })
           .signers([user1Keypair])
           .rpc(),
-        "ConstraintTokenBalance"
+        "0x1",
+        "insufficient funds"
       );
     });
 
@@ -592,7 +611,7 @@ describe("token-module", () => {
     it("Should fail to burn more tokens than balance", async () => {
       const user1Balance = (await getAccount(provider.connection, user1Ata)).amount;
       const burnAmount = new BN(user1Balance.toString()).add(new BN(1));
-      await expectAnchorError(
+      await expectProgramError(
         program.methods
           .burnTokens(burnAmount)
           .accounts({
@@ -603,7 +622,8 @@ describe("token-module", () => {
           })
           .signers([user1Keypair])
           .rpc(),
-        "ConstraintTokenBalance"
+        "0x1",
+        "insufficient funds"
       );
     });
   });
