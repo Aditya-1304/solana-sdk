@@ -6,11 +6,97 @@ declare_id!("8qzfg49CMM4u8UG6LaVhT4WuHC1CrgnrE8jYBzMFgvuZ");
 pub mod multisig_module {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        msg!("Greetings from: {:?}", ctx.program_id);
+    pub fn create_multisig(
+        _ctx: Context<CreateMultisig>,
+        owners: Vec<Pubkey>,
+        threshold: u8,
+    ) -> Result<()> {
+        msg!("Creating multisig with {} owners, threshold {}", owners.len(), threshold);
+        Ok(())
+    }
+
+    pub fn propose_transaction(
+        ctx: Context<ProposeTransaction>,
+        instruction_data: Vec<u8>,
+    ) -> Result<()> {
+        let proposer = &ctx.accounts.proposer;
+        msg!("Proposer {} is proposing a transaction", proposer.key());
+        Ok(())
+    }
+    pub fn approve_transaction(
+        ctx: Context<ApproveTransaction>,
+        transaction_id: u64,
+    ) -> Result<()> {
+        let approver = &ctx.accounts.approver;
+        msg!("Approver {} is approving transaction {}", approver.key(), transaction_id);
+        Ok(())
+    }
+    pub fn execute_transaction(
+        ctx: Context<ExecuteTransaction>,
+        transaction_id: u64,
+    ) -> Result<()> {
+        let executor = &ctx.accounts.executor;
+        msg!("Executor {} is executing transaction {}", executor.key(), transaction_id);
         Ok(())
     }
 }
 
 #[derive(Accounts)]
-pub struct Initialize {}
+pub struct CreateMultisig<'info> {
+    #[account(mut)]
+    pub creator: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ProposeTransaction<'info> {
+    #[account(mut)]
+    pub proposer: Signer<'info>,
+
+}
+
+#[derive(Accounts)]
+pub struct ApproveTransaction<'info> {
+    #[account(mut)]
+    pub approver: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct ExecuteTransaction<'info> {
+    #[account(mut)]
+    pub executor: Signer<'info>,
+}
+
+#[account]
+pub struct Multisig {
+    pub owners: Vec<Pubkey>,
+    pub threshold: u8,
+    pub transaction_count: u64,
+    pub bump: u8,
+}
+
+#[account]
+pub struct Transaction {
+    pub multisig: Pubkey,
+    pub instruction_data: Vec<u8>,
+    pub approvals: Vec<bool>,
+    pub executed: bool,
+    pub transaction_id: u64,
+
+}
+
+#[error_code]
+pub enum MultisigError {
+    #[msg("Invalid threshold")]
+    InvalidThreshold,
+    #[msg("Too many owners")]
+    TooManyOwners,
+    #[msg("Owner not found")]
+    OwnerNotFound,
+    #[msg("Already approved")]
+    AlreadyApproved,
+    #[msg("Not enough approvals")]
+    NotEnoughApprovals,
+    #[msg("Transaction already executed")]
+    AlreadyExecuted,
+}
