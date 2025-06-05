@@ -7,11 +7,30 @@ pub mod multisig_module {
     use super::*;
 
     pub fn create_multisig(
-        _ctx: Context<CreateMultisig>,
+        ctx: Context<CreateMultisig>,
         owners: Vec<Pubkey>,
         threshold: u8,
     ) -> Result<()> {
-        msg!("Creating multisig with {} owners, threshold {}", owners.len(), threshold);
+
+        let multisig = &mut ctx.accounts.multisig;
+
+        require!(threshold > 0, MultisigError::InvalidThreshold);
+        require!(threshold <= owners.len() as u8, MultisigError::InvalidThreshold);
+        require!(owners.len() <= 10, MultisigError::TooManyOwners);
+        require!(!owners.is_empty(), MultisigError::NoOwners);
+
+        for i in 0..owners.len() {
+            for j in i + 1..owners.len() {
+                require!(owners[i] != owners[j], MultisigError::DuplicateOwners);
+            }
+        }
+
+        multisig.owners = owners.clone();
+        multisig.threshold = threshold;
+        multisig.transaction_count = 0;
+        multisig.bump = ctx.bumps.multisig;
+
+        msg!("Multisig created with {} owners, threshold {}", owners.len(), threshold);
         Ok(())
     }
 
@@ -42,9 +61,20 @@ pub mod multisig_module {
 }
 
 #[derive(Accounts)]
+#[instruction(owners: Vec<Pubkey>, threshold: u8)]  
 pub struct CreateMultisig<'info> {
     #[account(mut)]
     pub creator: Signer<'info>,
+
+    #[account(
+        init,
+        payer = creator,
+        space = 8 + Multisig::INIT_SPACE,
+        seeds = [b"multisig", creator.key().as_ref()],
+        bump,
+    )]
+    pub multisig: Account<'info, Multisig>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -68,7 +98,9 @@ pub struct ExecuteTransaction<'info> {
 }
 
 #[account]
+#[derive(InitSpace)]
 pub struct Multisig {
+    #[max_len(10)]
     pub owners: Vec<Pubkey>,
     pub threshold: u8,
     pub transaction_count: u64,
@@ -87,10 +119,14 @@ pub struct Transaction {
 
 #[error_code]
 pub enum MultisigError {
-    #[msg("Invalid threshold")]
+    #[msg("Invalid threshold: must be > 0 and <= number of owners")]
     InvalidThreshold,
-    #[msg("Too many owners")]
+    #[msg("Too many owners: maximum 10 allowed")]
+    NoOwners,
+    #[msg("Duplicate owners not allowed")]
     TooManyOwners,
+    #[msg("Owner not found")]
+    DuplicateOwners,
     #[msg("Owner not found")]
     OwnerNotFound,
     #[msg("Already approved")]

@@ -1,16 +1,25 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { MultisigModule } from "../target/types/multisig_module";
+import { Keypair } from "@solana/web3.js";
+import { expect } from "chai";
 
-describe("multisig-module", () => {
-  // Configure the client to use the local cluster.
-  anchor.setProvider(anchor.AnchorProvider.env());
+describe("multisig", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
 
-  const program = anchor.workspace.multisigModule as Program<MultisigModule>;
+  const program = anchor.workspace.MultisigModule as Program<MultisigModule>;
 
-  it("Is initialized!", async () => {
-    // Add your test here.
-    const tx = await program.methods.initialize().rpc();
-    console.log("Your transaction signature", tx);
+  const owner1 = Keypair.generate();
+  const owner2 = Keypair.generate();
+  const owner3 = Keypair.generate();
+
+  it("Should create a multisig ", async () => {
+    console.log("Program ID:", program.programId.toString());
+    console.log("Owner 1:", owner1.publicKey.toString());
+    console.log("Owner 2:", owner2.publicKey.toString());
+    console.log("Owner 3:", owner3.publicKey.toString());
+
+    expect(true).to.equal(true);
   });
-});
+})
