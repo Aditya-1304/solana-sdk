@@ -4,7 +4,6 @@ declare_id!("8qzfg49CMM4u8UG6LaVhT4WuHC1CrgnrE8jYBzMFgvuZ");
 
 #[program]
 pub mod multisig_module {
-    use anchor_lang::solana_program::example_mocks::solana_sdk::transaction;
 
     use super::*;
 
@@ -165,6 +164,7 @@ pub struct ProposeTransaction<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(transaction_id: u64)]
 pub struct ApproveTransaction<'info> {
     #[account(mut)]
     pub approver: Signer<'info>,
@@ -176,7 +176,7 @@ pub struct ApproveTransaction<'info> {
         seeds = [
             b"transaction",
             multisig.key().as_ref(),
-            &multisig.transaction_count.to_le_bytes()
+            &transaction_id.to_le_bytes()
         ],
         bump,
         constraint = transaction.multisig == multisig.key() @ MultisigError::InvalidTransaction
@@ -200,13 +200,12 @@ pub struct Multisig {
     pub bump: u8,
 }
 
+
 #[account]
 #[derive(InitSpace)]
-
 pub struct Transaction {
     pub multisig: Pubkey,
     pub proposer: Pubkey,
-
     #[max_len(1000)]
     pub instruction_data: Vec<u8>,
     #[max_len(10)]
@@ -214,9 +213,7 @@ pub struct Transaction {
     pub executed: bool,
     pub transaction_id: u64,
     pub created_at: i64,
-
 }
-
 #[error_code]
 pub enum MultisigError {
     #[msg("Invalid threshold: must be > 0 and <= number of owners")]
