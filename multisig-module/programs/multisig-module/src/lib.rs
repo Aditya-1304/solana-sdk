@@ -4,6 +4,8 @@ declare_id!("8qzfg49CMM4u8UG6LaVhT4WuHC1CrgnrE8jYBzMFgvuZ");
 
 #[program]
 pub mod multisig_module {
+    use anchor_lang::solana_program::example_mocks::solana_sdk::transaction;
+
     use super::*;
 
     pub fn create_multisig(
@@ -75,9 +77,33 @@ pub mod multisig_module {
         transaction_id: u64,
     ) -> Result<()> {
         let approver = &ctx.accounts.approver;
-        msg!("Approver {} is approving transaction {}", approver.key(), transaction_id);
-        Ok(())
+        let multisig = &ctx.accounts.multisig;
+        let transaction = &mut ctx.accounts.transaction;
+
+        require!(!transaction.executed, MultisigError::AlreadyExecuted);
+        require!(transaction.transaction_id == transaction_id, MultisigError::InvalidTransactionId);
+
+        let owner_index = multisig.owners
+            .iter()
+            .position(|owner| owner == approver.key)
+            .ok_or(MultisigError::OwnerNotFound)?;
+
+        require!(!transaction.approvals[owner_index], MultisigError::AlreadyApproved);
+
+        transaction.approvals[owner_index] = true;
+
+        let approval_count = transaction.approvals.iter().filter(|&&approved| approved).count();
+
+        msg!(
+        "Transaction {} approved by {}. Approvals: {}/{}",
+        transaction_id,
+        approver.key,
+        approval_count,
+        multisig.threshold
+        );Ok(())
     }
+
+
     pub fn execute_transaction(
         ctx: Context<ExecuteTransaction>,
         transaction_id: u64,
@@ -142,6 +168,20 @@ pub struct ProposeTransaction<'info> {
 pub struct ApproveTransaction<'info> {
     #[account(mut)]
     pub approver: Signer<'info>,
+
+    pub multisig: Account<'info, Multisig>,
+
+    #[account(
+        mut,
+        seeds = [
+            b"transaction",
+            multisig.key().as_ref(),
+            &multisig.transaction_count.to_le_bytes()
+        ],
+        bump,
+        constraint = transaction.multisig == multisig.key() @ MultisigError::InvalidTransaction
+    )]
+    pub transaction: Account<'info, Transaction>,
 }
 
 #[derive(Accounts)]
@@ -199,4 +239,8 @@ pub enum MultisigError {
     EmptyTransaction,
     #[msg("Transaction data too large")]
     TransactionTooLarge,
+    #[msg("Invalid transaction ID")]
+    InvalidTransactionId,
+    #[msg("Invalid transaction")]
+    InvalidTransaction,
 }
