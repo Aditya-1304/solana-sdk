@@ -7,11 +7,30 @@ pub mod multisig_module {
     use super::*;
 
     pub fn create_multisig(
-        _ctx: Context<CreateMultisig>,
+        ctx: Context<CreateMultisig>,
         owners: Vec<Pubkey>,
         threshold: u8,
     ) -> Result<()> {
-        msg!("Creating multisig with {} owners, threshold {}", owners.len(), threshold);
+
+        let multisig = &mut ctx.accounts.multisig;
+
+        require!(threshold > 0, MultisigError::InvalidThreshold);
+        require!(threshold <= owners.len() as u8, MultisigError::InvalidThreshold);
+        require!(owners.len() <= 10, MultisigError::TooManyOwners);
+        require!(!owners.is_empty(), MultisigError::NoOwners);
+
+        for i in 0..owners.len() {
+            for j in i + 1..owners.len() {
+                require!(owners[i] != owners[j], MultisigError::DuplicateOwners);
+            }
+        }
+
+        multisig.owners = owners.clone();
+        multisig.threshold = threshold;
+        multisig.transaction_count = 0;
+        multisig.bump = ctx.bumps.multisig;
+
+        msg!("Multisig created with {} owners, threshold {}", owners.len(), threshold);
         Ok(())
     }
 
@@ -20,9 +39,37 @@ pub mod multisig_module {
         instruction_data: Vec<u8>,
     ) -> Result<()> {
         let proposer = &ctx.accounts.proposer;
-        msg!("Proposer {} is proposing a transaction", proposer.key());
+
+        let multisig = &mut ctx.accounts.multisig;
+        let transaction = &mut ctx.accounts.transaction;
+        let proposer = &ctx.accounts.proposer;
+
+        require!(!instruction_data.is_empty(), MultisigError::EmptyTransaction);
+        require!(instruction_data.len() <= 1000, MultisigError::TransactionTooLarge);
+
+        let is_owner = multisig.owners.iter().any(|owner| owner == proposer.key);
+        require!(is_owner, MultisigError::OwnerNotFound);
+
+        transaction.multisig = multisig.key();
+        transaction.proposer = proposer.key();
+        transaction.instruction_data = instruction_data.clone();
+        transaction.transaction_id = multisig.transaction_count;
+        transaction.executed = false;
+        transaction.created_at = Clock::get()?.unix_timestamp;
+
+        transaction.approvals = vec![false; multisig.owners.len()];
+
+        multisig.transaction_count += 1;
+
+        msg!(
+                "Transaction {} proposed by {} with {} bytes of data", 
+                transaction.transaction_id,
+                proposer.key(),
+                instruction_data.len()
+            );
         Ok(())
     }
+    
     pub fn approve_transaction(
         ctx: Context<ApproveTransaction>,
         transaction_id: u64,
@@ -42,9 +89,20 @@ pub mod multisig_module {
 }
 
 #[derive(Accounts)]
+#[instruction(owners: Vec<Pubkey>, threshold: u8)]  
 pub struct CreateMultisig<'info> {
     #[account(mut)]
     pub creator: Signer<'info>,
+
+    #[account(
+        init,
+        payer = creator,
+        space = 8 + Multisig::INIT_SPACE,
+        seeds = [b"multisig", creator.key().as_ref()],
+        bump,
+    )]
+    pub multisig: Account<'info, Multisig>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -52,6 +110,30 @@ pub struct CreateMultisig<'info> {
 pub struct ProposeTransaction<'info> {
     #[account(mut)]
     pub proposer: Signer<'info>,
+
+    #[account(
+        mut,
+        // seeds = [b"multisig", multisig.owners[0].as_ref()],
+        // bump = multisig.bump,
+
+        // We will derive the multisig seed at client side
+    )]
+    pub multisig: Account<'info, Multisig>,
+
+    #[account(
+        init,
+        payer = proposer,
+        space = 8 + Transaction::INIT_SPACE,
+        seeds = [
+            b"transaction",
+            multisig.key().as_ref(),
+            &multisig.transaction_count.to_le_bytes()
+        ],
+        bump,
+    )]
+    pub transaction: Account<'info, Transaction>,
+
+    pub system_program: Program<'info, System>,
 
 }
 
@@ -68,7 +150,9 @@ pub struct ExecuteTransaction<'info> {
 }
 
 #[account]
+#[derive(InitSpace)]
 pub struct Multisig {
+    #[max_len(10)]
     pub owners: Vec<Pubkey>,
     pub threshold: u8,
     pub transaction_count: u64,
@@ -76,21 +160,32 @@ pub struct Multisig {
 }
 
 #[account]
+#[derive(InitSpace)]
+
 pub struct Transaction {
     pub multisig: Pubkey,
+    pub proposer: Pubkey,
+
+    #[max_len(1000)]
     pub instruction_data: Vec<u8>,
+    #[max_len(10)]
     pub approvals: Vec<bool>,
     pub executed: bool,
     pub transaction_id: u64,
+    pub created_at: i64,
 
 }
 
 #[error_code]
 pub enum MultisigError {
-    #[msg("Invalid threshold")]
+    #[msg("Invalid threshold: must be > 0 and <= number of owners")]
     InvalidThreshold,
-    #[msg("Too many owners")]
+    #[msg("No owners provided")]
+    NoOwners,
+    #[msg("Too many owners: maximum 10 allowed")]
     TooManyOwners,
+    #[msg("Duplicate owners not allowed")]
+    DuplicateOwners,
     #[msg("Owner not found")]
     OwnerNotFound,
     #[msg("Already approved")]
@@ -99,4 +194,8 @@ pub enum MultisigError {
     NotEnoughApprovals,
     #[msg("Transaction already executed")]
     AlreadyExecuted,
+    #[msg("Empty transaction data")]
+    EmptyTransaction,
+    #[msg("Transaction data too large")]
+    TransactionTooLarge,
 }
