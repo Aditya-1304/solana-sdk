@@ -107,6 +107,7 @@ pub struct CreateMultisig<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(instruction_data: Vec<u8>)]
 pub struct ProposeTransaction<'info> {
     #[account(mut)]
     pub proposer: Signer<'info>,

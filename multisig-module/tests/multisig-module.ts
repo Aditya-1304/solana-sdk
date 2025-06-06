@@ -184,4 +184,119 @@ describe("multisig", () => {
 
     })
   })
+
+
+  describe("Propose Transaction", () => {
+    let multisigPDA: PublicKey;
+    let transactionPDA: PublicKey;
+
+    beforeEach(async () => {
+      await fundAccount(creator);
+      const owners = [owner1.publicKey, owner2.publicKey, owner3.publicKey];
+      const threshold = 2;
+
+      [multisigPDA] = findMultisigPDA(creator.publicKey);
+
+      await program.methods
+        .createMultisig(owners, threshold)
+        .accounts({
+          creator: creator.publicKey,
+          multisig: multisigPDA,
+          systemProgram: anchor.web3.SystemProgram.programId
+        } as any)
+        .signers([creator])
+        .rpc();
+    });
+
+    const findTransactionPDA = (multisigPDA: PublicKey, transactionId: number) => {
+      // Create the buffer for the transaction ID (u64 little-endian)
+      const buffer = Buffer.allocUnsafe(8);
+      buffer.writeBigUInt64LE(BigInt(transactionId), 0);
+
+      return PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPDA.toBuffer(),
+          buffer, // ← Now 'buffer' is properly defined
+        ],
+        program.programId
+      );
+    };
+
+    it("Should propose a transaction successfully", async () => {
+      await fundAccount(owner1);
+
+      const instructionData = Buffer.from("dummy_instruction_data");
+      [transactionPDA] = findTransactionPDA(multisigPDA, 0);
+
+      await program.methods
+        .proposeTransaction(instructionData) // ← Keep as Buffer
+        .accounts({
+          proposer: owner1.publicKey,
+          multisig: multisigPDA,
+          transaction: transactionPDA,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([owner1])
+        .rpc();
+
+      const transactionAccount = await program.account.transaction.fetch(transactionPDA);
+
+      assert.isTrue(transactionAccount.multisig.equals(multisigPDA));
+      assert.isTrue(transactionAccount.proposer.equals(owner1.publicKey));
+      assert.equal(transactionAccount.transactionId.toNumber(), 0);
+      assert.isFalse(transactionAccount.executed);
+      assert.equal(transactionAccount.approvals.length, 3);
+      // assert.deepEqual(transactionAccount.instructionData, Array.from(instructionData)); // ← Compare with Array.from()
+
+      console.log("✅ Transaction proposed successfully!");
+      console.log("   Transaction ID:", transactionAccount.transactionId.toString());
+      console.log("   Proposer:", transactionAccount.proposer.toString());
+    });
+
+    it("Should fail when non-owner tries to propose", async () => {
+      const nonOwner = Keypair.generate();
+      await fundAccount(nonOwner);
+
+      const instructionData = Buffer.from("dummy_instruction_data");
+      [transactionPDA] = findTransactionPDA(multisigPDA, 0);
+
+      await expectAnchorError(
+        program.methods
+          .proposeTransaction(instructionData) // ← Keep as Buffer
+          .accounts({
+            proposer: nonOwner.publicKey,
+            multisig: multisigPDA,
+            transaction: transactionPDA,
+            systemProgram: anchor.web3.SystemProgram.programId,
+          } as any)
+          .signers([nonOwner])
+          .rpc(),
+        "Owner not found"
+      );
+      console.log("✅ Correctly rejected non-owner proposal");
+    });
+
+    it("Should fail when empty instruction data", async () => {
+      await fundAccount(owner1);
+
+      const instructionData = Buffer.from([]); // Empty buffer
+      [transactionPDA] = findTransactionPDA(multisigPDA, 0);
+
+      await expectAnchorError(
+        program.methods
+          .proposeTransaction(instructionData) // ← Keep as Buffer
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPDA,
+            transaction: transactionPDA,
+            systemProgram: anchor.web3.SystemProgram.programId,
+          } as any)
+          .signers([owner1])
+          .rpc(),
+        "Empty transaction"
+      );
+      console.log("✅ Correctly rejected empty instruction data");
+    });
+  })
 })
