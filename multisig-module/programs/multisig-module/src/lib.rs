@@ -4,6 +4,7 @@ declare_id!("8qzfg49CMM4u8UG6LaVhT4WuHC1CrgnrE8jYBzMFgvuZ");
 
 #[program]
 pub mod multisig_module {
+
     use super::*;
 
     pub fn create_multisig(
@@ -75,15 +76,65 @@ pub mod multisig_module {
         transaction_id: u64,
     ) -> Result<()> {
         let approver = &ctx.accounts.approver;
-        msg!("Approver {} is approving transaction {}", approver.key(), transaction_id);
-        Ok(())
+        let multisig = &ctx.accounts.multisig;
+        let transaction = &mut ctx.accounts.transaction;
+
+        require!(!transaction.executed, MultisigError::AlreadyExecuted);
+        require!(transaction.transaction_id == transaction_id, MultisigError::InvalidTransactionId);
+
+        let owner_index = multisig.owners
+            .iter()
+            .position(|owner| owner == approver.key)
+            .ok_or(MultisigError::OwnerNotFound)?;
+
+        require!(!transaction.approvals[owner_index], MultisigError::AlreadyApproved);
+
+        transaction.approvals[owner_index] = true;
+
+        let approval_count = transaction.approvals.iter().filter(|&&approved| approved).count();
+
+        msg!(
+        "Transaction {} approved by {}. Approvals: {}/{}",
+        transaction_id,
+        approver.key,
+        approval_count,
+        multisig.threshold
+        );Ok(())
     }
+
+
     pub fn execute_transaction(
         ctx: Context<ExecuteTransaction>,
         transaction_id: u64,
     ) -> Result<()> {
         let executor = &ctx.accounts.executor;
-        msg!("Executor {} is executing transaction {}", executor.key(), transaction_id);
+        let multisig = &ctx.accounts.multisig;
+        let transaction = &mut ctx.accounts.transaction;
+
+        require!(!transaction.executed, MultisigError::AlreadyExecuted);
+        require!(transaction.transaction_id == transaction_id, MultisigError::InvalidTransactionId);
+
+        let is_owner = multisig.owners.iter().any(|owner| owner == executor.key);
+        require!(is_owner, MultisigError::OwnerNotFound);
+
+        let approval_count = transaction.approvals.iter().filter(|&&approved| approved).count() as u8;
+
+        require!(approval_count >= multisig.threshold, MultisigError::NotEnoughApprovals);
+
+        transaction.executed = true;
+
+        msg!(
+        "Transaction {} executed by {}. Had {}/{} approvals",
+        transaction_id,
+        executor.key,
+        approval_count,
+        multisig.threshold
+        );
+
+        // TODO: In a real implementation, you would execute the actual instruction here
+        // For now, we just mark it as executed and log it
+        msg!("Instruction data to execute: {:?}", transaction.instruction_data);
+
         Ok(())
     }
 }
@@ -107,6 +158,7 @@ pub struct CreateMultisig<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(instruction_data: Vec<u8>)]
 pub struct ProposeTransaction<'info> {
     #[account(mut)]
     pub proposer: Signer<'info>,
@@ -138,15 +190,45 @@ pub struct ProposeTransaction<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(transaction_id: u64)]
 pub struct ApproveTransaction<'info> {
     #[account(mut)]
     pub approver: Signer<'info>,
+
+    pub multisig: Account<'info, Multisig>,
+
+    #[account(
+        mut,
+        seeds = [
+            b"transaction",
+            multisig.key().as_ref(),
+            &transaction_id.to_le_bytes()
+        ],
+        bump,
+        constraint = transaction.multisig == multisig.key() @ MultisigError::InvalidTransaction
+    )]
+    pub transaction: Account<'info, Transaction>,
 }
 
 #[derive(Accounts)]
+#[instruction(transaction_id: u64)]
 pub struct ExecuteTransaction<'info> {
     #[account(mut)]
     pub executor: Signer<'info>,
+
+    pub multisig: Account<'info, Multisig>,
+
+    #[account(
+        mut,
+        seeds = [
+            b"transaction",
+            multisig.key().as_ref(),
+            &transaction_id.to_le_bytes()
+        ],
+        bump,
+        constraint = transaction.multisig == multisig.key() @ MultisigError::InvalidTransaction
+    )]
+    pub transaction: Account<'info, Transaction>,
 }
 
 #[account]
@@ -159,13 +241,12 @@ pub struct Multisig {
     pub bump: u8,
 }
 
+
 #[account]
 #[derive(InitSpace)]
-
 pub struct Transaction {
     pub multisig: Pubkey,
     pub proposer: Pubkey,
-
     #[max_len(1000)]
     pub instruction_data: Vec<u8>,
     #[max_len(10)]
@@ -173,9 +254,7 @@ pub struct Transaction {
     pub executed: bool,
     pub transaction_id: u64,
     pub created_at: i64,
-
 }
-
 #[error_code]
 pub enum MultisigError {
     #[msg("Invalid threshold: must be > 0 and <= number of owners")]
@@ -198,4 +277,8 @@ pub enum MultisigError {
     EmptyTransaction,
     #[msg("Transaction data too large")]
     TransactionTooLarge,
+    #[msg("Invalid transaction ID")]
+    InvalidTransactionId,
+    #[msg("Invalid transaction")]
+    InvalidTransaction,
 }
