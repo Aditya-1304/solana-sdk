@@ -366,6 +366,45 @@ pub struct ChangeThreshold<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(transaction_id: u64, new_owner: Pubkey)]
+pub struct AddOwner<'info> {
+    #[account(mut)]
+    pub multisig: Account<'info, Multisig>,
+    
+    #[account(
+        constraint = transaction.multisig == multisig.key() @ MultisigError::InvalidTransaction,
+        constraint = transaction.transaction_id == transaction_id @ MultisigError::InvalidTransactionId
+    )]
+    pub transaction: Account<'info, Transaction>,
+}
+
+#[derive(Accounts)]
+#[instruction(transaction_id: u64, owner_to_remove: Pubkey)]
+pub struct RemoveOwner<'info> {
+    #[account(mut)]
+    pub multisig: Account<'info, Multisig>,
+    
+    #[account(
+        constraint = transaction.multisig == multisig.key() @ MultisigError::InvalidTransaction,
+        constraint = transaction.transaction_id == transaction_id @ MultisigError::InvalidTransactionId
+    )]
+    pub transaction: Account<'info, Transaction>,
+}
+
+#[derive(Accounts)]
+#[instruction(transaction_id: u64)]
+pub struct UnpauseMultisig<'info> {
+    #[account(mut)]
+    pub multisig: Account<'info, Multisig>,
+    
+    #[account(
+        constraint = transaction.multisig == multisig.key() @ MultisigError::InvalidTransaction,
+        constraint = transaction.transaction_id == transaction_id @ MultisigError::InvalidTransactionId
+    )]
+    pub transaction: Account<'info, Transaction>,
+}
+
+#[derive(Accounts)]
 pub struct EmergencyAction<'info> {
     #[account(mut)]
     pub caller: Signer<'info>,
