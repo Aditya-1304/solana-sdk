@@ -487,5 +487,230 @@ describe("multisig", () => {
     });
 
 
+  });
+
+  describe("Execute Transaction", () => {
+    let multisigPDA: PublicKey;
+    let transactionPDA: PublicKey;
+    const transactionId = new BN(0);
+
+    beforeEach(async () => {
+      await fundAccount(creator);
+      const owners = [owner1.publicKey, owner2.publicKey, owner3.publicKey];
+      const threshold = 2;
+
+      [multisigPDA] = findMultisigPDA(creator.publicKey);
+
+      await program.methods
+        .createMultisig(owners, threshold)
+        .accounts({
+          creator: creator.publicKey,
+          multisig: multisigPDA,
+          systemProgram: anchor.web3.SystemProgram.programId
+        } as any)
+        .signers([creator])
+        .rpc();
+
+      await fundAccount(owner1);
+      const instructionData = Buffer.from("dummy_instruction_data");
+      [transactionPDA] = findTransactionPDA(multisigPDA, 0);
+
+      await program.methods
+        .proposeTransaction(instructionData)
+        .accounts({
+          proposer: owner1.publicKey,
+          multisig: multisigPDA,
+          transaction: transactionPDA,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([owner1])
+        .rpc();
+
+      await fundAccount(owner2)
+      await fundAccount(owner3)
+
+
+      await program.methods
+        .approveTransaction(transactionId)
+        .accounts({
+          approver: owner2.publicKey,
+          multisig: multisigPDA,
+          transaction: transactionPDA,
+        } as any)
+        .signers([owner2])
+        .rpc();
+
+      // Approve by owner3
+      await program.methods
+        .approveTransaction(transactionId)
+        .accounts({
+          approver: owner3.publicKey,
+          multisig: multisigPDA,
+          transaction: transactionPDA,
+        } as any)
+        .signers([owner3])
+        .rpc();
+    });
+
+    const findTransactionPDA = (multisigPDA: PublicKey, transactionId: number) => {
+      const buffer = Buffer.allocUnsafe(8);
+      buffer.writeBigUInt64LE(BigInt(transactionId), 0);
+
+      return PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPDA.toBuffer(),
+          buffer,
+        ],
+        program.programId
+      );
+    };
+
+    it("Should execute a transaction successfully", async () => {
+      await program.methods
+        .executeTransaction(transactionId)
+        .accounts({
+          executor: owner1.publicKey,
+          multisig: multisigPDA,
+          transaction: transactionPDA,
+        } as any)
+        .signers([owner1])
+        .rpc();
+
+      const transactionAccount = await program.account.transaction.fetch(transactionPDA);
+
+      assert.isTrue(transactionAccount.executed);
+      assert.equal(transactionAccount.transactionId.toNumber(), 0);
+
+      console.log("✅ Transaction executed successfully!");
+      console.log("   Transaction ID:", transactionAccount.transactionId.toString());
+      console.log("   Executed:", transactionAccount.executed);
+    });
+
+    it("Should fail when trying to execute twice", async () => {
+      // First execution
+      await program.methods
+        .executeTransaction(transactionId)
+        .accounts({
+          executor: owner1.publicKey,
+          multisig: multisigPDA,
+          transaction: transactionPDA,
+        } as any)
+        .signers([owner1])
+        .rpc();
+
+      // Try to execute again (should fail)
+      try {
+        await program.methods
+          .executeTransaction(transactionId)
+          .accounts({
+            executor: owner2.publicKey,
+            multisig: multisigPDA,
+            transaction: transactionPDA,
+          } as any)
+          .signers([owner2])
+          .rpc();
+
+        assert.fail("Expected execution to fail");
+      } catch (error: any) {
+        const errorStr = error.toString();
+
+        // Check for any of these possible error formats
+        const validErrors = [
+          "Already executed",
+          "AlreadyExecuted",
+          "Transaction already executed"
+        ];
+
+        const hasValidError = validErrors.some(msg => errorStr.includes(msg));
+        expect(hasValidError).to.be.true;
+
+        console.log("✅ Correctly rejected double execution");
+        console.log("   Error:", errorStr.split('\n')[0]); // Show first line of error
+      }
+    });
+
+    it("Should fail when non-owner tries to execute", async () => {
+      const nonOwner = Keypair.generate();
+      await fundAccount(nonOwner);
+
+      await expectAnchorError(
+        program.methods
+          .executeTransaction(transactionId)
+          .accounts({
+            executor: nonOwner.publicKey,
+            multisig: multisigPDA,
+            transaction: transactionPDA,
+          } as any)
+          .signers([nonOwner])
+          .rpc(),
+        "Owner not found"
+      );
+
+      console.log("✅ Correctly rejected non-owner execution")
+    });
+
+    it("Should fail when not enough approvals", async () => {
+      const instructionData = Buffer.from("another_transaction");
+      const newTransactionId = new BN(1);
+      const [newTransactionPDA] = findTransactionPDA(multisigPDA, newTransactionId.toNumber());
+
+      await program.methods
+        .proposeTransaction(instructionData)
+        .accounts({
+          proposer: owner1.publicKey,
+          multisig: multisigPDA,
+          transaction: newTransactionPDA,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([owner1])
+        .rpc();
+
+      await program.methods
+        .approveTransaction(newTransactionId)
+        .accounts({
+          approver: owner2.publicKey,
+          multisig: multisigPDA,
+          transaction: newTransactionPDA,
+        } as any)
+        .signers([owner2])
+        .rpc();
+
+
+      await expectAnchorError(
+        program.methods
+          .executeTransaction(newTransactionId)
+          .accounts({
+            executor: owner1.publicKey,
+            multisig: multisigPDA,
+            transaction: newTransactionPDA,
+          } as any)
+          .signers([owner1])
+          .rpc(),
+        "Not enough approvals"
+      );
+      console.log("✅ Correctly rejected execution with not enough approvals");
+    });
+
+    it("Should fail with invalid transaction ID", async () => {
+      const invalidTransactionId = new BN(999);
+      const [invalidTransactionPDA] = findTransactionPDA(multisigPDA, 999);
+
+      await expectAnchorError(
+        program.methods
+          .executeTransaction(invalidTransactionId)
+          .accounts({
+            executor: owner1.publicKey,
+            multisig: multisigPDA,
+            transaction: invalidTransactionPDA,
+
+          } as any)
+          .signers([owner1])
+          .rpc(),
+        "AccountNotInitialized" // Account doesn't exist
+      );
+
+      console.log("✅ Correctly rejected execution with invalid transaction ID");
+    })
   })
 })

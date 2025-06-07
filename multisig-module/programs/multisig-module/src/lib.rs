@@ -108,7 +108,33 @@ pub mod multisig_module {
         transaction_id: u64,
     ) -> Result<()> {
         let executor = &ctx.accounts.executor;
-        msg!("Executor {} is executing transaction {}", executor.key(), transaction_id);
+        let multisig = &ctx.accounts.multisig;
+        let transaction = &mut ctx.accounts.transaction;
+
+        require!(!transaction.executed, MultisigError::AlreadyExecuted);
+        require!(transaction.transaction_id == transaction_id, MultisigError::InvalidTransactionId);
+
+        let is_owner = multisig.owners.iter().any(|owner| owner == executor.key);
+        require!(is_owner, MultisigError::OwnerNotFound);
+
+        let approval_count = transaction.approvals.iter().filter(|&&approved| approved).count() as u8;
+
+        require!(approval_count >= multisig.threshold, MultisigError::NotEnoughApprovals);
+
+        transaction.executed = true;
+
+        msg!(
+        "Transaction {} executed by {}. Had {}/{} approvals",
+        transaction_id,
+        executor.key,
+        approval_count,
+        multisig.threshold
+        );
+
+        // TODO: In a real implementation, you would execute the actual instruction here
+        // For now, we just mark it as executed and log it
+        msg!("Instruction data to execute: {:?}", transaction.instruction_data);
+
         Ok(())
     }
 }
@@ -185,9 +211,24 @@ pub struct ApproveTransaction<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(transaction_id: u64)]
 pub struct ExecuteTransaction<'info> {
     #[account(mut)]
     pub executor: Signer<'info>,
+
+    pub multisig: Account<'info, Multisig>,
+
+    #[account(
+        mut,
+        seeds = [
+            b"transaction",
+            multisig.key().as_ref(),
+            &transaction_id.to_le_bytes()
+        ],
+        bump,
+        constraint = transaction.multisig == multisig.key() @ MultisigError::InvalidTransaction
+    )]
+    pub transaction: Account<'info, Transaction>,
 }
 
 #[account]
