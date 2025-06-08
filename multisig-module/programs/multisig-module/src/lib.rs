@@ -34,6 +34,12 @@ pub mod multisig_module {
         multisig.threshold = threshold;
         multisig.transaction_count = 0;
         multisig.bump = ctx.bumps.multisig;
+        multisig.paused = false; 
+        multisig.paused_by = Pubkey::default();
+        multisig.paused_at = 0;
+        multisig.created_at = Clock::get()?.unix_timestamp;
+
+        multisig.validate_state()?;
 
         msg!("Multisig created with {} owners, threshold {}", owners.len(), threshold);
         Ok(())
@@ -47,8 +53,12 @@ pub mod multisig_module {
         let multisig = &mut ctx.accounts.multisig;
         let transaction = &mut ctx.accounts.transaction;
 
-        require!(transaction.executed, MultisigError::TransactionNotExecuted);
+        require!(!transaction.executed, MultisigError::AlreadyExecuted);
         require!(transaction.is_ready_to_execute(multisig.threshold), MultisigError::NotEnoughApprovals);
+
+
+        multisig.threshold = new_threshold;
+        transaction.executed = true;
 
         require!(new_threshold > 0, MultisigError::InvalidThreshold);
         require!(new_threshold <= multisig.owners.len() as u8, MultisigError::InvalidThreshold);
@@ -63,13 +73,18 @@ pub mod multisig_module {
         ctx: Context<AddOwner>,
         transaction_id: u64,
         new_owner: Pubkey,
+        new_threshold: u8,
     ) -> Result<()> {
         let multisig = &mut ctx.accounts.multisig;
-        let transaction = &ctx.accounts.transaction;
+        let transaction = &mut ctx.accounts.transaction;
 
 
-        require!(transaction.executed, MultisigError::TransactionNotExecuted);
+        require!(!transaction.executed, MultisigError::AlreadyExecuted);
         require!(transaction.is_ready_to_execute(multisig.threshold), MultisigError::NotEnoughApprovals);
+
+        
+        multisig.threshold = new_threshold;
+        transaction.executed = true;
 
         // Validate new owner
         require!(new_owner != Pubkey::default(), MultisigError::InvalidOwner);
@@ -85,12 +100,16 @@ pub mod multisig_module {
         ctx: Context<RemoveOwner>,
         transaction_id: u64,
         owner_to_remove: Pubkey,
+        new_threshold: u8,
     ) -> Result<()> {
         let multisig = &mut ctx.accounts.multisig;
-        let transaction = &ctx.accounts.transaction;
+        let transaction = &mut ctx.accounts.transaction;
 
         require!(transaction.executed, MultisigError::TransactionNotExecuted);
         require!(transaction.is_ready_to_execute(multisig.threshold), MultisigError::NotEnoughApprovals);
+
+        multisig.threshold = new_threshold;
+        transaction.executed = true; 
 
         // Find and remove owner
         let owner_index = multisig.owners
@@ -190,8 +209,12 @@ pub mod multisig_module {
         let multisig = &ctx.accounts.multisig;
         let transaction = &mut ctx.accounts.transaction;
 
+        require!(!multisig.paused, MultisigError::MultisigPaused);
+        multisig.validate_state()?;
+        transaction.validate_state(multisig)?;
         require!(!transaction.executed, MultisigError::AlreadyExecuted);
-        require!(transaction.transaction_id == transaction_id, MultisigError::InvalidTransactionId);
+        require!(transaction.transaction_id == transaction_id ,MultisigError::InvalidTransactionId
+        );
 
         let owner_index = multisig.owners
             .iter()
@@ -232,6 +255,8 @@ pub mod multisig_module {
         let transaction = &mut ctx.accounts.transaction;
 
         require!(!transaction.executed, MultisigError::AlreadyExecuted);
+        multisig.validate_state()?;
+        transaction.validate_state(multisig)?;
         require!(transaction.transaction_id == transaction_id, MultisigError::InvalidTransactionId);
 
         let is_owner = multisig.owners.iter().any(|owner| owner == executor.key);
@@ -432,6 +457,14 @@ impl Multisig {
         require!(self.owners.len() <= 10, MultisigError::TooManyOwners);
         require!(self.threshold > 0, MultisigError::InvalidThreshold);
         require!(self.threshold <= self.owners.len() as u8, MultisigError::InvalidThreshold);
+
+        let mut sorted_owners = self.owners.clone();
+        sorted_owners.sort();
+
+        for i in 1..sorted_owners.len() {
+            require!(sorted_owners[i-1] != sorted_owners[i], MultisigError::DuplicateOwners);
+            require!(sorted_owners[i] != Pubkey::default(), MultisigError::InvalidOwner);
+        }
         Ok(())
     }
 }
@@ -439,15 +472,17 @@ impl Multisig {
 #[account]
 #[derive(InitSpace)]
 pub struct Transaction {
-    pub multisig: Pubkey,
-    pub proposer: Pubkey,
-    #[max_len(1000)]
-    pub instruction_data: Vec<u8>,
-    #[max_len(10)]
-    pub approvals: Vec<bool>,
-    pub executed: bool,
     pub transaction_id: u64,
     pub created_at: i64,
+    pub executed: bool,
+
+    pub multisig: Pubkey,
+    pub proposer: Pubkey,
+
+    #[max_len(10)]
+    pub approvals: Vec<bool>,
+    #[max_len(1000)]
+    pub instruction_data: Vec<u8>,
 }
 
 
@@ -474,7 +509,20 @@ impl Transaction {
     }
 
     pub fn is_ready_to_execute(&self, threshold: u8) -> bool {
-        self.approval_count() >= threshold as usize && !self.executed
+        if self.executed {
+            return false;
+        }
+
+        let mut count = 0u8;
+        for &approved in &self.approvals {
+            if approved {
+                count += 1;
+                if count >= threshold {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
