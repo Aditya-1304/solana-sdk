@@ -19,7 +19,7 @@ pub fn propose_transaction(
 
         let clock = Clock::get()?;
         require!(
-            clock.slot > multisig.last_proposal_slot + 10,
+            clock.slot > multisig.last_proposal_slot + 2,
             MultisigError::RateLimitExceeded
         );
 
