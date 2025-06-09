@@ -1,13 +1,13 @@
-use anchor_lang::prelude::*;
+use anchor_lang::{prelude::*};
 use crate::{
-    Multisig, Transaction, MultisigError,
+    MultisigError,
     ThresholdChanged, OwnerAdded, OwnerRemoved, MultisigUnpaused,
     ChangeThreshold, AddOwner, RemoveOwner, UnpauseMultisig
 };
 
 pub fn change_threshold(
         ctx: Context<ChangeThreshold>,
-        transaction_id: u64,
+        _transaction_id: u64,
         new_threshold: u8,
     ) -> Result<()> {
         let multisig = &mut ctx.accounts.multisig;
@@ -27,13 +27,21 @@ pub fn change_threshold(
         multisig.threshold = new_threshold; 
         transaction.executed = true; 
 
+        emit!(ThresholdChanged {
+          multisig: multisig.key(),
+          transaction: transaction.key(),
+          old_threshold,
+          new_threshold,
+          changed_at: Clock::get()?.unix_timestamp,
+        });
+
         msg!("Threshold changed from {} to {}", old_threshold, new_threshold);
         Ok(())
     }
 
     pub fn add_owner(
         ctx: Context<AddOwner>,
-        transaction_id: u64,
+        _transaction_id: u64,
         new_owner: Pubkey,
     ) -> Result<()> {
         let multisig = &mut ctx.accounts.multisig;
@@ -55,13 +63,21 @@ pub fn change_threshold(
         multisig.owners.push(new_owner); 
         transaction.executed = true; 
 
+        emit!(OwnerAdded {
+          multisig: multisig.key(),
+          transaction: transaction.key(),
+          new_owner,
+          total_owners: multisig.owners.len() as u8,
+          added_at: Clock::get()?.unix_timestamp,
+        });
+
         msg!("Owner {} added. Total owners: {}", new_owner, multisig.owners.len());
         Ok(())
     }
 
     pub fn remove_owner(
         ctx: Context<RemoveOwner>,
-        transaction_id: u64,
+        _transaction_id: u64,
         owner_to_remove: Pubkey,
     ) -> Result<()> {
         let multisig = &mut ctx.accounts.multisig;
@@ -87,7 +103,15 @@ pub fn change_threshold(
         require!(multisig.admin_threshold <= multisig.owners.len() as u8, MultisigError::InvalidAdminThreshold);
         require!(!multisig.owners.is_empty(), MultisigError::NoOwners);
 
-        transaction.executed = true; // ✅ Mark as executed only once
+        transaction.executed = true; 
+
+        emit!(OwnerRemoved {
+          multisig: multisig.key(),
+          transaction: transaction.key(),
+          removed_owner: owner_to_remove,
+          total_owners: multisig.owners.len() as u8,
+          removed_at: Clock::get()?.unix_timestamp,
+        });
 
         msg!("Owner {} removed. Total owners: {}", owner_to_remove, multisig.owners.len());
         Ok(())
@@ -95,7 +119,7 @@ pub fn change_threshold(
 
 pub fn unpause(
         ctx: Context<UnpauseMultisig>,
-        transaction_id: u64,
+        _transaction_id: u64,
     ) -> Result<()> {
         let multisig = &mut ctx.accounts.multisig;
         let transaction = &mut ctx.accounts.transaction;
@@ -108,6 +132,12 @@ pub fn unpause(
         multisig.paused_by = Pubkey::default();
         multisig.paused_at = 0;
         transaction.executed = true;
+
+        emit!(MultisigUnpaused {
+          multisig:multisig.key(),
+          transaction: transaction.key(),
+          unpaused_at: Clock::get()?.unix_timestamp,
+        });
 
         msg!("Multisig unpaused");
         Ok(())

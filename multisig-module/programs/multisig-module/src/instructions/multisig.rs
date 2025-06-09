@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use crate::{Multisig, MultisigError, MultisigCreated, MultisigPaused, CreateMultisig, EmergencyAction};
+use crate::{MultisigError, MultisigCreated, MultisigPaused, CreateMultisig, EmergencyAction};
 
 
 pub fn create_multisig(
@@ -44,6 +44,15 @@ pub fn create_multisig(
 
         multisig.validate_state()?;
 
+        emit!(MultisigCreated {
+          multisig: multisig.key(),
+          creator: ctx.accounts.creator.key(),
+          owners: multisig.owners.clone(),
+          threshold,
+          admin_threshold: admin_thresh,
+          created_at: multisig.created_at,
+        });
+
         msg!("Multisig created with {} owners, threshold {}, admin threshold {}", 
              owners.len(), threshold, admin_thresh);
         Ok(())
@@ -60,6 +69,12 @@ pub fn emergency_pause(ctx: Context<EmergencyAction>) -> Result<()> {
         multisig.paused = true;
         multisig.paused_by = caller.key();
         multisig.paused_at = Clock::get()?.unix_timestamp;
+
+        emit!(MultisigPaused {
+          multisig: multisig.key(),
+          paused_by: caller.key(),
+          paused_at: multisig.paused_at,
+        });
 
         msg!("Multisig paused by {}", caller.key);
         Ok(())

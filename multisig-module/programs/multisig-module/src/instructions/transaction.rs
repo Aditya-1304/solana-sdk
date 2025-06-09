@@ -1,6 +1,6 @@
-use anchor_lang::prelude::*;
+use anchor_lang::{prelude::*};
 use crate::{
-    Multisig, Transaction, TransactionType, MultisigError,
+    TransactionType, MultisigError,
     TransactionProposed, TransactionApproved, TransactionExecuted,
     ProposeTransaction, ApproveTransaction, ExecuteTransaction,
     calculate_instruction_complexity
@@ -56,9 +56,17 @@ pub fn propose_transaction(
         multisig.transaction_count = multisig.transaction_count
             .checked_add(1)
             .ok_or(MultisigError::TransactionCountOverflow)?;
-
-        
         multisig.last_proposal_slot = clock.slot;
+
+        emit!(TransactionProposed {
+          multisig: multisig.key(),
+          transaction: transaction.key(),
+          proposer: proposer.key(),
+          transaction_id: current_transaction_id,
+          transaction_type: transaction_type.clone(),
+          expires_at,
+          created_at: clock.unix_timestamp,
+        });
 
         msg!(
             "Transaction {} of type {:?} proposed by {} with {} bytes of data, expires at {}", 
@@ -106,6 +114,16 @@ pub fn propose_transaction(
 
         let approval_count = transaction.approvals.iter().filter(|&&approved| approved).count();
 
+
+        emit!(TransactionApproved {
+          multisig: multisig.key(),
+          transaction: transaction.key(),
+          approver: approver.key(),
+          transaction_id,
+          approval_count: approval_count as u8,
+          required_approvals: multisig.threshold,
+        });
+
         msg!(
         "Transaction {} approved by {}. Approvals: {}/{}",
         transaction_id,
@@ -151,6 +169,16 @@ pub fn propose_transaction(
         require!(approval_count >= required_approvals, MultisigError::NotEnoughApprovals);
 
         transaction.executed = true;
+
+        emit!(TransactionExecuted {
+          multisig: multisig.key(),
+          transaction: transaction.key(),
+          executor: executor.key(),
+          transaction_id,
+          transaction_type: transaction.transaction_type.clone(),
+          approval_count,
+          executed_at: clock.unix_timestamp,
+        });
 
         msg!(
             "Transaction {} of type {:?} executed by {}. Had {}/{} approvals",
