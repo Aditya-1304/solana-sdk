@@ -1,716 +1,1602 @@
 import * as anchor from "@coral-xyz/anchor";
-import { Program, BN } from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
 import { MultisigModule } from "../target/types/multisig_module";
-import { Keypair, PublicKey } from "@solana/web3.js";
-import { assert, expect } from "chai";
+import {
+  Keypair,
+  SystemProgram,
+  PublicKey,
+  LAMPORTS_PER_SOL,
+  Transaction,
+  TransactionInstruction,
+} from "@solana/web3.js";
+import { expect } from "chai";
 
-describe("multisig", () => {
-  const provider = anchor.AnchorProvider.env();
+describe("Multisig Module - Production Test Suite", () => {
+  const provider = anchor.AnchorProvider.env()
   anchor.setProvider(provider);
 
   const program = anchor.workspace.MultisigModule as Program<MultisigModule>;
 
-  let creator: Keypair;
-  let owner1: Keypair;
-  let owner2: Keypair;
-  let owner3: Keypair;
+  const creator = Keypair.generate();
+  const owner1 = Keypair.generate();
+  const owner2 = Keypair.generate();
+  const owner3 = Keypair.generate();
+  const owner4 = Keypair.generate();
+  const owner5 = Keypair.generate();
+  const nonOwner = Keypair.generate();
 
-  beforeEach(() => {
-    creator = Keypair.generate();
-    owner1 = Keypair.generate();
-    owner2 = Keypair.generate();
-    owner3 = Keypair.generate();
-  })
+  let multisigPda: PublicKey;
+  let multisigBump: number;
 
-  const expectAnchorError = async (fn: Promise<any>, expectedErrorMessage: string) => {
-    try {
-      await fn;
-      assert.fail("Expected promise to be rejected but it resolved successfully");
-    } catch (error: any) {
-      const errorStr = error.toString();
-      expect(errorStr).to.include(expectedErrorMessage);
+  const testInstruction = Buffer.from("test instruction data");
+  const testSeed = Array.from({ length: 32 }, (_, i) => i);
+
+  before(async () => {
+    console.log("Setting up test environment...");
+
+    const accounts = [creator, owner1, owner2, owner3, owner4, owner5, nonOwner];
+    for (const account of accounts) {
+      await provider.connection.confirmTransaction(
+        await provider.connection.requestAirdrop(account.publicKey, 2 * LAMPORTS_PER_SOL),
+        "confirmed"
+      );
     }
-  }
 
-  const findMultisigPDA = (creatorPubkey: PublicKey) => {
-    return PublicKey.findProgramAddressSync(
-      [Buffer.from("multisig"), creatorPubkey.toBuffer()],
+    [multisigPda, multisigBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from("multisig"), creator.publicKey.toBuffer()],
       program.programId
     );
-  };
 
-  const fundAccount = async (keypair: Keypair, lamports: number = 1000000000) => {
-    const signature = await provider.connection.requestAirdrop(
-      keypair.publicKey,
-      lamports
-    );
-    await provider.connection.confirmTransaction(signature);
-  }
+    console.log("✅ Test environment ready!");
+    console.log("📍 Creator:", creator.publicKey.toString());
+    console.log("📍 Multisig PDA:", multisigPda.toString());
 
-  describe("Create Multisig", () => {
-    it("Should create a 2-of-3 multisig successfully", async () => {
-      await fundAccount(creator);
+  });
 
+
+  describe("1. Multisig Creation", () => {
+    it("should create a multisig with valid parameters", async () => {
       const owners = [owner1.publicKey, owner2.publicKey, owner3.publicKey];
       const threshold = 2;
+      const adminThreshold = 3;
 
-      const [multisigPDA] = findMultisigPDA(creator.publicKey);
-
-      await program.methods
-        .createMultisig(owners, threshold)
+      const tx = await program.methods
+        .createMultisig(owners, threshold, adminThreshold)
         .accounts({
           creator: creator.publicKey,
-          multisig: multisigPDA,
-          systemProgram: anchor.web3.SystemProgram.programId
+          multisig: multisigPda,
+          systemProgram: SystemProgram.programId,
         } as any)
         .signers([creator])
-        .rpc();
+        .rpc()
+      console.log("Multisig created with tx:", tx);
 
-      const multisigAccount = await program.account.multisig.fetch(multisigPDA);
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      expect(multisig.owners).to.have.lengthOf(3);
+      expect(multisig.threshold).to.equal(2);
+      expect(multisig.adminThreshold).to.equal(3);
+      expect(multisig.transactionCount.toNumber()).to.equal(0);
+      expect(multisig.paused).to.be.false;
+      expect(multisig.nonce.toNumber()).to.equal(0);
 
-      assert.equal(multisigAccount.threshold, threshold);
-      assert.equal(multisigAccount.owners.length, 3)
-      assert.equal(multisigAccount.transactionCount.toNumber(), 0);
+      console.log("✅ Multisig created successfully with proper state!");
 
-      owners.forEach((owner, index) => {
-        assert.isTrue(multisigAccount.owners[index].equals(owner));
-      });
-
-      console.log("✅ Multisig created successfully!");
-      console.log("   Multisig PDA:", multisigPDA.toString());
-      console.log("   Owners:", multisigAccount.owners.map(o => o.toString()));
-      console.log("   Threshold:", multisigAccount.threshold);
     });
 
-    it("Should fail with invalid threshold (0)", async () => {
-      await fundAccount(creator);
-
-      const owners = [owner1.publicKey, owner2.publicKey];
-      const threshold = 0;
-
-      const [multisigPDA] = findMultisigPDA(creator.publicKey);
-
-      await expectAnchorError(
-        program.methods
-          .createMultisig(owners, threshold)
-          .accounts({
-            creator: creator.publicKey, // ← Added this
-            multisig: multisigPDA,
-            systemProgram: anchor.web3.SystemProgram.programId,
-          } as any)
-          .signers([creator])
-          .rpc(),
-        "Invalid threshold" // This should now work
+    it("Should fail with no owners", async () => {
+      const newCreator = Keypair.generate();
+      await provider.connection.confirmTransaction(
+        await provider.connection.requestAirdrop(newCreator.publicKey, LAMPORTS_PER_SOL),
       );
 
-      console.log("✅ Correctly rejected threshold = 0");
-    });
-
-    it("Should fail with threshold > number of owners", async () => {
-      await fundAccount(creator)
-
-      const owners = [owner1.publicKey, owner2.publicKey]
-      const threshold = 3;
-
-      const [multisigPDA] = findMultisigPDA(creator.publicKey);
+      const [newMultisigPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("multisig"), newCreator.publicKey.toBuffer()],
+        program.programId
+      );
 
       try {
         await program.methods
-          .createMultisig(owners, threshold)
+          .createMultisig([], 1, null)
           .accounts({
-            creator: creator.publicKey,
-            multisig: multisigPDA,
-            systemProgram: anchor.web3.SystemProgram.programId,
+            creator: newCreator.publicKey,
+            multisig: newMultisigPda,
+            systemProgram: SystemProgram.programId,
           } as any)
-          .signers([creator])
+          .signers([newCreator])
+          .rpc();
+        expect.fail("Should have failed with no owners");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("NoOwners");
+        console.log("✅ Correctly rejected empty owners array");
+
+      }
+    });
+
+    it("Should fail with invalid threshold", async () => {
+      const newCreator = Keypair.generate();
+      await provider.connection.confirmTransaction(
+        await provider.connection.requestAirdrop(newCreator.publicKey, LAMPORTS_PER_SOL),
+        "confirmed"
+      );
+
+      const [newMultisigPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("multisig"), newCreator.publicKey.toBuffer()],
+        program.programId
+      );
+
+      try {
+        await program.methods
+          .createMultisig([owner1.publicKey], 0, null)
+          .accounts({
+            creator: newCreator.publicKey,
+            multisig: newMultisigPda,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .signers([newCreator])
           .rpc();
 
-        assert.fail("Should have thrown an error");
+        expect.fail("Should have failed with invalid threshold");
       } catch (error) {
-        expect(error.message).to.include("Invalid threshold");
-        console.log("✅ Correctly rejected threshold > owners");
+        expect(error.error.errorCode.code).to.equal("InvalidThreshold");
+        console.log("✅ Correctly rejected invalid threshold");
       }
     });
 
     it("Should fail with duplicate owners", async () => {
-      await fundAccount(creator);
-
-      const owners = [owner1.publicKey, owner1.publicKey];
-      const threshold = 1;
-
-      const [multisigPDA] = findMultisigPDA(creator.publicKey);
-
-      await expectAnchorError(
-        program.methods
-          .createMultisig(owners, threshold)
-          .accounts({
-            creator: creator.publicKey,
-            multisig: multisigPDA,
-            systemProgram: anchor.web3.SystemProgram.programId,
-          } as any)
-          .signers([creator])
-          .rpc(),
-        "DuplicateOwners" // Try without the space
+      const newCreator = Keypair.generate();
+      await provider.connection.confirmTransaction(
+        await provider.connection.requestAirdrop(newCreator.publicKey, LAMPORTS_PER_SOL
+        ),
+        "confirmed"
       );
 
-      console.log("✅ Correctly rejected duplicate owners");
-    });
-
-    it("Should create a 1-of-1 multisig (single owner)", async () => {
-      await fundAccount(creator)
-
-      const owners = [owner1.publicKey]
-      const threshold = 1;
-
-      const [multisigPDA] = findMultisigPDA(creator.publicKey);
-
-      await program.methods
-        .createMultisig(owners, threshold)
-        .accounts({
-          creator: creator.publicKey,
-          multisig: multisigPDA,
-          systemProgram: anchor.web3.SystemProgram.programId
-        } as any)
-        .signers([creator])
-        .rpc()
-
-      const multisigAccount = await program.account.multisig.fetch(multisigPDA);
-
-      assert.equal(multisigAccount.threshold, 1);
-      assert.equal(multisigAccount.owners.length, 1);
-      assert.isTrue(multisigAccount.owners[0].equals(owner1.publicKey));
-
-      console.log("✅ 1-of-1 multisig created successfully!");
-
-    })
-  })
-
-
-  describe("Propose Transaction", () => {
-    let multisigPDA: PublicKey;
-    let transactionPDA: PublicKey;
-
-    beforeEach(async () => {
-      await fundAccount(creator);
-      const owners = [owner1.publicKey, owner2.publicKey, owner3.publicKey];
-      const threshold = 2;
-
-      [multisigPDA] = findMultisigPDA(creator.publicKey);
-
-      await program.methods
-        .createMultisig(owners, threshold)
-        .accounts({
-          creator: creator.publicKey,
-          multisig: multisigPDA,
-          systemProgram: anchor.web3.SystemProgram.programId
-        } as any)
-        .signers([creator])
-        .rpc();
-    });
-
-    const findTransactionPDA = (multisigPDA: PublicKey, transactionId: number) => {
-      // Create the buffer for the transaction ID (u64 little-endian)
-      const buffer = Buffer.allocUnsafe(8);
-      buffer.writeBigUInt64LE(BigInt(transactionId), 0);
-
-      return PublicKey.findProgramAddressSync(
-        [
-          Buffer.from("transaction"),
-          multisigPDA.toBuffer(),
-          buffer, // ← Now 'buffer' is properly defined
-        ],
+      const [newMultisigPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("multisig"), newCreator.publicKey.toBuffer()],
         program.programId
-      );
-    };
+      )
 
-    it("Should propose a transaction successfully", async () => {
-      await fundAccount(owner1);
-
-      const instructionData = Buffer.from("dummy_instruction_data");
-      [transactionPDA] = findTransactionPDA(multisigPDA, 0);
-
-      await program.methods
-        .proposeTransaction(instructionData) // ← Keep as Buffer
-        .accounts({
-          proposer: owner1.publicKey,
-          multisig: multisigPDA,
-          transaction: transactionPDA,
-          systemProgram: anchor.web3.SystemProgram.programId,
-        } as any)
-        .signers([owner1])
-        .rpc();
-
-      const transactionAccount = await program.account.transaction.fetch(transactionPDA);
-
-      assert.isTrue(transactionAccount.multisig.equals(multisigPDA));
-      assert.isTrue(transactionAccount.proposer.equals(owner1.publicKey));
-      assert.equal(transactionAccount.transactionId.toNumber(), 0);
-      assert.isFalse(transactionAccount.executed);
-      assert.equal(transactionAccount.approvals.length, 3);
-      // assert.deepEqual(transactionAccount.instructionData, Array.from(instructionData)); // ← Compare with Array.from()
-
-      console.log("✅ Transaction proposed successfully!");
-      console.log("   Transaction ID:", transactionAccount.transactionId.toString());
-      console.log("   Proposer:", transactionAccount.proposer.toString());
-    });
-
-    it("Should fail when non-owner tries to propose", async () => {
-      const nonOwner = Keypair.generate();
-      await fundAccount(nonOwner);
-
-      const instructionData = Buffer.from("dummy_instruction_data");
-      [transactionPDA] = findTransactionPDA(multisigPDA, 0);
-
-      await expectAnchorError(
-        program.methods
-          .proposeTransaction(instructionData) // ← Keep as Buffer
-          .accounts({
-            proposer: nonOwner.publicKey,
-            multisig: multisigPDA,
-            transaction: transactionPDA,
-            systemProgram: anchor.web3.SystemProgram.programId,
-          } as any)
-          .signers([nonOwner])
-          .rpc(),
-        "Owner not found"
-      );
-      console.log("✅ Correctly rejected non-owner proposal");
-    });
-
-    it("Should fail when empty instruction data", async () => {
-      await fundAccount(owner1);
-
-      const instructionData = Buffer.from([]); // Empty buffer
-      [transactionPDA] = findTransactionPDA(multisigPDA, 0);
-
-      await expectAnchorError(
-        program.methods
-          .proposeTransaction(instructionData) // ← Keep as Buffer
-          .accounts({
-            proposer: owner1.publicKey,
-            multisig: multisigPDA,
-            transaction: transactionPDA,
-            systemProgram: anchor.web3.SystemProgram.programId,
-          } as any)
-          .signers([owner1])
-          .rpc(),
-        "Empty transaction"
-      );
-      console.log("✅ Correctly rejected empty instruction data");
-    });
-  })
-
-  describe("Approve Transaction", () => {
-    let multisigPDA: PublicKey;
-    let transactionPDA: PublicKey;
-    const transactionId = new BN(0);
-    beforeEach(async () => {
-
-      await fundAccount(creator);
-      const owners = [owner1.publicKey, owner2.publicKey, owner3.publicKey];
-      const threshold = 2;
-
-      [multisigPDA] = findMultisigPDA(creator.publicKey);
-
-      await program.methods
-        .createMultisig(owners, threshold)
-        .accounts({
-          creator: creator.publicKey,
-          multisig: multisigPDA,
-          systemProgram: anchor.web3.SystemProgram.programId
-        } as any)
-        .signers([creator])
-        .rpc();
-
-      await fundAccount(owner1);
-      const instructionData = Buffer.from("dummy_instruction_data");
-      [transactionPDA] = findTransactionPDA(multisigPDA, 0);
-
-      await program.methods
-        .proposeTransaction(instructionData)
-        .accounts({
-          proposer: owner1.publicKey,
-          multisig: multisigPDA,
-          transaction: transactionPDA,
-          systemProgram: anchor.web3.SystemProgram.programId,
-        } as any)
-        .signers([owner1])
-        .rpc();
-    });
-
-    const findTransactionPDA = (multisigPDA: PublicKey, transactionId: number) => {
-      const buffer = Buffer.allocUnsafe(8);
-      buffer.writeBigUInt64LE(BigInt(transactionId), 0);
-
-      return PublicKey.findProgramAddressSync(
-        [
-          Buffer.from("transaction"),
-          multisigPDA.toBuffer(),
-          buffer,
-        ],
-        program.programId
-      );
-    };
-
-    it("Should approve a transaction successfully", async () => {
-      await fundAccount(owner2);
-
-      await program.methods
-        .approveTransaction(transactionId)
-        .accounts({
-          approver: owner2.publicKey,
-          multisig: multisigPDA,
-          transaction: transactionPDA,
-        } as any)
-        .signers([owner2])
-        .rpc();
-
-      const transactionAccount = await program.account.transaction.fetch(transactionPDA);
-
-      assert.equal(transactionAccount.approvals.length, 3);
-      assert.isFalse(transactionAccount.approvals[0]); // owner1 index
-      assert.isTrue(transactionAccount.approvals[1]);  // owner2 index (approved)
-      assert.isFalse(transactionAccount.approvals[2]); // owner3 index
-
-      console.log("✅ Transaction approved successfully!");
-      console.log("   Approvals:", transactionAccount.approvals);
-
-    });
-
-    it("Should allow multiple approvals", async () => {
-      await fundAccount(owner2);
-      await fundAccount(owner3);
-
-      await program.methods
-        .approveTransaction(transactionId)
-        .accounts({
-          approver: owner2.publicKey,
-          multisig: multisigPDA,
-          transaction: transactionPDA,
-        } as any)
-        .signers([owner2])
-        .rpc();
-
-      await program.methods
-        .approveTransaction(transactionId)
-        .accounts({
-          approver: owner3.publicKey,
-          multisig: multisigPDA,
-          transaction: transactionPDA,
-        } as any)
-        .signers([owner3])
-        .rpc();
-
-      const transactionAccount = await program.account.transaction.fetch(transactionPDA);
-
-      assert.isFalse(transactionAccount.approvals[0]);
-      assert.isTrue(transactionAccount.approvals[1]);
-      assert.isTrue(transactionAccount.approvals[2]);
-
-      const approvalCount = transactionAccount.approvals.filter(approved => approved).length;
-      assert.equal(approvalCount, 2);
-
-      console.log("✅ Multiple approvals recorded successfully!");
-      console.log("   Approvals:", transactionAccount.approvals);
-    });
-
-    it("Should fail when non-owner tries to approve", async () => {
-      const nonOwner = Keypair.generate();
-      await fundAccount(nonOwner);
-
-      await expectAnchorError(
-        program.methods
-          .approveTransaction(transactionId)
-          .accounts({
-            approver: nonOwner.publicKey,
-            multisig: multisigPDA,
-            transaction: transactionPDA,
-          } as any)
-          .signers([nonOwner])
-          .rpc(),
-        "Owner not found"
-      );
-
-      console.log("✅ Correctly rejected non-owner approval");
-
-    });
-
-    it("Should fail when already approved", async () => {
-      await fundAccount(owner2);
-
-      await program.methods
-        .approveTransaction(transactionId)
-        .accounts({
-          approver: owner2.publicKey,
-          multisig: multisigPDA,
-          transaction: transactionPDA,
-        } as any)
-        .signers([owner2])
-        .rpc();
-
-      await expectAnchorError(
-        program.methods
-          .approveTransaction(transactionId)
-          .accounts({
-            approver: owner2.publicKey,
-            multisig: multisigPDA,
-            transaction: transactionPDA,
-          } as any)
-          .signers([owner2])
-          .rpc(),
-        "Already approved"
-      );
-
-      console.log("✅ Correctly rejected already approved transaction");
-    });
-
-    it("Should fail with invalid transaction ID", async () => {
-      await fundAccount(owner2);
-      const invalidTransactionId = new BN(999);
-
-      const [invalidTransactionPDA] = findTransactionPDA(multisigPDA, 999);
-
-      await expectAnchorError(
-        program.methods
-          .approveTransaction(invalidTransactionId)
-          .accounts({
-            approver: owner2.publicKey,
-            multisig: multisigPDA,
-            transaction: invalidTransactionPDA,
-          } as any)
-          .signers([owner2])
-          .rpc(),
-        "AccountNotInitialized" // Account doesn't exist
-      );
-
-      console.log("✅ Correctly rejected invalid transaction ID");
-    });
-
-
-  });
-
-  describe("Execute Transaction", () => {
-    let multisigPDA: PublicKey;
-    let transactionPDA: PublicKey;
-    const transactionId = new BN(0);
-
-    beforeEach(async () => {
-      await fundAccount(creator);
-      const owners = [owner1.publicKey, owner2.publicKey, owner3.publicKey];
-      const threshold = 2;
-
-      [multisigPDA] = findMultisigPDA(creator.publicKey);
-
-      await program.methods
-        .createMultisig(owners, threshold)
-        .accounts({
-          creator: creator.publicKey,
-          multisig: multisigPDA,
-          systemProgram: anchor.web3.SystemProgram.programId
-        } as any)
-        .signers([creator])
-        .rpc();
-
-      await fundAccount(owner1);
-      const instructionData = Buffer.from("dummy_instruction_data");
-      [transactionPDA] = findTransactionPDA(multisigPDA, 0);
-
-      await program.methods
-        .proposeTransaction(instructionData)
-        .accounts({
-          proposer: owner1.publicKey,
-          multisig: multisigPDA,
-          transaction: transactionPDA,
-          systemProgram: anchor.web3.SystemProgram.programId,
-        } as any)
-        .signers([owner1])
-        .rpc();
-
-      await fundAccount(owner2)
-      await fundAccount(owner3)
-
-
-      await program.methods
-        .approveTransaction(transactionId)
-        .accounts({
-          approver: owner2.publicKey,
-          multisig: multisigPDA,
-          transaction: transactionPDA,
-        } as any)
-        .signers([owner2])
-        .rpc();
-
-      // Approve by owner3
-      await program.methods
-        .approveTransaction(transactionId)
-        .accounts({
-          approver: owner3.publicKey,
-          multisig: multisigPDA,
-          transaction: transactionPDA,
-        } as any)
-        .signers([owner3])
-        .rpc();
-    });
-
-    const findTransactionPDA = (multisigPDA: PublicKey, transactionId: number) => {
-      const buffer = Buffer.allocUnsafe(8);
-      buffer.writeBigUInt64LE(BigInt(transactionId), 0);
-
-      return PublicKey.findProgramAddressSync(
-        [
-          Buffer.from("transaction"),
-          multisigPDA.toBuffer(),
-          buffer,
-        ],
-        program.programId
-      );
-    };
-
-    it("Should execute a transaction successfully", async () => {
-      await program.methods
-        .executeTransaction(transactionId)
-        .accounts({
-          executor: owner1.publicKey,
-          multisig: multisigPDA,
-          transaction: transactionPDA,
-        } as any)
-        .signers([owner1])
-        .rpc();
-
-      const transactionAccount = await program.account.transaction.fetch(transactionPDA);
-
-      assert.isTrue(transactionAccount.executed);
-      assert.equal(transactionAccount.transactionId.toNumber(), 0);
-
-      console.log("✅ Transaction executed successfully!");
-      console.log("   Transaction ID:", transactionAccount.transactionId.toString());
-      console.log("   Executed:", transactionAccount.executed);
-    });
-
-    it("Should fail when trying to execute twice", async () => {
-      // First execution
-      await program.methods
-        .executeTransaction(transactionId)
-        .accounts({
-          executor: owner1.publicKey,
-          multisig: multisigPDA,
-          transaction: transactionPDA,
-        } as any)
-        .signers([owner1])
-        .rpc();
-
-      // Try to execute again (should fail)
       try {
         await program.methods
-          .executeTransaction(transactionId)
+          .createMultisig([owner1.publicKey, owner1.publicKey], 1, null)
           .accounts({
-            executor: owner2.publicKey,
-            multisig: multisigPDA,
-            transaction: transactionPDA,
+            creator: newCreator.publicKey,
+            multisig: newMultisigPda,
+            systemProgram: SystemProgram.programId,
           } as any)
-          .signers([owner2])
+          .signers([newCreator])
           .rpc();
-
-        assert.fail("Expected execution to fail");
-      } catch (error: any) {
-        const errorStr = error.toString();
-
-        // Check for any of these possible error formats
-        const validErrors = [
-          "Already executed",
-          "AlreadyExecuted",
-          "Transaction already executed"
-        ];
-
-        const hasValidError = validErrors.some(msg => errorStr.includes(msg));
-        expect(hasValidError).to.be.true;
-
-        console.log("✅ Correctly rejected double execution");
-        console.log("   Error:", errorStr.split('\n')[0]); // Show first line of error
+        expect.fail("Should have failed with duplicate owners");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("DuplicateOwners");
+        console.log("✅ Correctly rejected duplicate owners");
       }
     });
 
-    it("Should fail when non-owner tries to execute", async () => {
-      const nonOwner = Keypair.generate();
-      await fundAccount(nonOwner);
-
-      await expectAnchorError(
-        program.methods
-          .executeTransaction(transactionId)
-          .accounts({
-            executor: nonOwner.publicKey,
-            multisig: multisigPDA,
-            transaction: transactionPDA,
-          } as any)
-          .signers([nonOwner])
-          .rpc(),
-        "Owner not found"
+    it("Should fail with too many owners", async () => {
+      const newCreator = Keypair.generate();
+      await provider.connection.confirmTransaction(
+        await provider.connection.requestAirdrop(newCreator.publicKey, LAMPORTS_PER_SOL),
+        "confirmed"
       );
 
-      console.log("✅ Correctly rejected non-owner execution")
+      const [newMultisigPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("multisig"), newCreator.publicKey.toBuffer()],
+        program.programId
+      );
+
+      const tooManyOwners = Array.from({ length: 11 }, () => Keypair.generate().publicKey);
+
+      try {
+        await program.methods
+          .createMultisig(tooManyOwners, 5, null)
+          .accounts({
+            creator: newCreator.publicKey,
+            multisig: newMultisigPda,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .signers([newCreator])
+          .rpc();
+        expect.fail("Should have failed with too many owners");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("TooManyOwners");
+        console.log("✅ Correctly rejected too many owners");
+      }
+    })
+  });
+
+  describe("2. Transaction Proposal", () => {
+    let transactionPda: PublicKey;
+    let currentNonce: number;
+
+    before(async () => {
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      currentNonce = multisig.nonce.toNumber();
+
+      [transactionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
+      );
     });
 
-    it("Should fail when not enough approvals", async () => {
-      const instructionData = Buffer.from("another_transaction");
-      const newTransactionId = new BN(1);
-      const [newTransactionPDA] = findTransactionPDA(multisigPDA, newTransactionId.toNumber());
+    it("Should propose transaction succesfully", async () => {
+      const tx = await program.methods
+        .proposeTransaction(
+          Array.from(testInstruction),
+          new anchor.BN(currentNonce),
+          {
+            transfer: {}
+          },
+          72
+        )
+        .accounts({
+          proposer: creator.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([creator])
+        .rpc();
+
+      console.log("📜 Propose transaction tx:", tx);
+
+      // Verify transaction state
+      const transaction = await program.account.transaction.fetch(transactionPda);
+      expect(transaction.transactionId.toNumber()).to.equal(0);
+      expect(transaction.executed).to.be.false;
+      expect(transaction.proposer.toString()).to.equal(creator.publicKey.toString());
+      expect(transaction.approvals).to.have.lengthOf(3);
+      expect(transaction.approvals.every(approved => !approved)).to.be.true;
+
+      // Verify multisig state updated
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      expect(multisig.transactionCount.toNumber()).to.equal(1);
+      expect(multisig.nonce.toNumber()).to.equal(currentNonce + 1);
+
+      console.log("✅ Transaction proposed successfully!");
+
+    });
+
+    it("Should fail with wrong nonce", async () => {
+      try {
+        await program.methods
+          .proposeTransaction(
+            Array.from(testInstruction),
+            new anchor.BN(999),
+            { transfer: {} },
+            72
+          )
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .signers([owner1])
+          .rpc();
+        expect.fail("Should have failed with wrong nonce");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("InvalidNonce");
+        console.log("✅ Correctly rejected wrong nonce");
+      }
+    });
+    it("Should fail with non-owner proposer", async () => {
+      try {
+        await program.methods
+          .proposeTransaction(
+            Array.from(testInstruction),
+            new anchor.BN(currentNonce),
+            { transfer: {} },
+            72
+          )
+          .accounts({
+            proposer: nonOwner.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .signers([nonOwner])
+          .rpc();
+
+        expect.fail("Should have failed with non-owner proposer");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("OwnerNotFound");
+        console.log("✅ Correctly rejected non-owner proposer");
+      }
+    });
+
+    it("Should fail with empty instruction data", async () => {
+      try {
+        await program.methods
+          .proposeTransaction(
+            [],
+            new anchor.BN(currentNonce),
+            { transfer: {} },
+            72
+          )
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+            systemProgram: SystemProgram.programId
+          } as any)
+          .signers([owner1])
+          .rpc();
+        expect.fail("Should have failed with empty instruction data");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("EmptyTransaction");
+        console.log("✅ Correctly rejected empty instruction data");
+      }
+    });
+
+    it("Should fail with oversized instruction data", async () => {
+      const oversizedData = Array.from({ length: 1001 }, (_, i) => i % 256); // > 1000 bytes
+
+      try {
+        await program.methods
+          .proposeTransaction(
+            oversizedData,
+            new anchor.BN(currentNonce),
+            { transfer: {} },
+            72
+          )
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+            systemProgram: SystemProgram.programId
+          } as any)
+          .signers([owner1])
+          .rpc();
+        expect.fail("Should have failed with oversized instruction data");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("TransactionTooLarge");
+        console.log("✅ Correctly rejected oversized instruction data");
+      }
+    });
+  });
+
+  describe("👍 3. Transaction Approval", () => {
+    let transactionPda: PublicKey;
+    let transactionId: number;
+
+    before(async () => {
+      // Create a new transaction to approve
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      const currentNonce = multisig.nonce.toNumber();
+      transactionId = multisig.transactionCount.toNumber();
+
+      [transactionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
+      );
 
       await program.methods
-        .proposeTransaction(instructionData)
+        .proposeTransaction(
+          Array.from(testInstruction),
+          new anchor.BN(currentNonce),
+          { transfer: {} },
+          72
+        )
         .accounts({
           proposer: owner1.publicKey,
-          multisig: multisigPDA,
-          transaction: newTransactionPDA,
-          systemProgram: anchor.web3.SystemProgram.programId,
-        } as any)
+          multisig: multisigPda,
+          transaction: transactionPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([owner1])
+        .rpc();
+    });
+
+    it("✅ Should approve transaction successfully", async () => {
+      const tx = await program.methods
+        .approveTransaction(new anchor.BN(transactionId))
+        .accounts({
+          approver: owner2.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+        })
+        .signers([owner2])
+        .rpc();
+
+      console.log("📜 Approve transaction tx:", tx);
+
+      // Verify approval was recorded
+      const transaction = await program.account.transaction.fetch(transactionPda);
+      expect(transaction.approvals[1]).to.be.true; // owner2 is at index 1
+
+      console.log("✅ Transaction approved successfully!");
+    });
+
+    it("❌ Should fail with non-owner approver", async () => {
+      try {
+        await program.methods
+          .approveTransaction(new anchor.BN(transactionId))
+          .accounts({
+            approver: nonOwner.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+          })
+          .signers([nonOwner])
+          .rpc();
+
+        expect.fail("Should have failed with non-owner approver");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("OwnerNotFound");
+        console.log("✅ Correctly rejected non-owner approver");
+      }
+    });
+
+    it("❌ Should fail with double approval", async () => {
+      try {
+        await program.methods
+          .approveTransaction(new anchor.BN(transactionId))
+          .accounts({
+            approver: owner2.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+          })
+          .signers([owner2])
+          .rpc();
+
+        expect.fail("Should have failed with double approval");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("AlreadyApproved");
+        console.log("✅ Correctly rejected double approval");
+      }
+    });
+
+    it("❌ Should fail with wrong transaction ID", async () => {
+      try {
+        await program.methods
+          .approveTransaction(new anchor.BN(999)) // Wrong transaction ID
+          .accounts({
+            approver: owner3.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+          })
+          .signers([owner3])
+          .rpc();
+
+        expect.fail("Should have failed with wrong transaction ID");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("InvalidTransactionId");
+        console.log("✅ Correctly rejected wrong transaction ID");
+      }
+    });
+  });
+
+  describe("⚡ 4. Transaction Execution", () => {
+    let transactionPda: PublicKey;
+    let transactionId: number;
+
+    before(async () => {
+      // Create and fully approve a new transaction
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      const currentNonce = multisig.nonce.toNumber();
+      transactionId = multisig.transactionCount.toNumber();
+
+      [transactionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
+      );
+
+      // Propose transaction
+      await program.methods
+        .proposeTransaction(
+          Array.from(testInstruction),
+          new anchor.BN(currentNonce),
+          { transfer: {} },
+          72
+        )
+        .accounts({
+          proposer: owner1.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([owner1])
+        .rpc();
+
+      // Get enough approvals (threshold = 2)
+      await program.methods
+        .approveTransaction(new anchor.BN(transactionId))
+        .accounts({
+          approver: owner2.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+        })
+        .signers([owner2])
+        .rpc();
+
+      // Wait a slot to avoid same-slot execution error
+      await new Promise(resolve => setTimeout(resolve, 500));
+    });
+
+    it("✅ Should execute transaction successfully", async () => {
+      const tx = await program.methods
+        .executeTransaction(new anchor.BN(transactionId))
+        .accounts({
+          executor: owner1.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+        })
+        .signers([owner1])
+        .rpc();
+
+      console.log("📜 Execute transaction tx:", tx);
+
+      // Verify transaction was executed
+      const transaction = await program.account.transaction.fetch(transactionPda);
+      expect(transaction.executed).to.be.true;
+
+      console.log("✅ Transaction executed successfully!");
+    });
+
+    it("❌ Should fail to execute already executed transaction", async () => {
+      try {
+        await program.methods
+          .executeTransaction(new anchor.BN(transactionId))
+          .accounts({
+            executor: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+          })
+          .signers([owner1])
+          .rpc();
+
+        expect.fail("Should have failed with already executed transaction");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("AlreadyExecuted");
+        console.log("✅ Correctly rejected already executed transaction");
+      }
+    });
+
+    it("❌ Should fail execution with insufficient approvals", async () => {
+      // Create a new transaction with only 1 approval (threshold = 2)
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      const currentNonce = multisig.nonce.toNumber();
+      const newTransactionId = multisig.transactionCount.toNumber();
+
+      const [newTransactionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
+      );
+
+      // Propose new transaction
+      await program.methods
+        .proposeTransaction(
+          Array.from(testInstruction),
+          new anchor.BN(currentNonce),
+          { transfer: {} },
+          72
+        )
+        .accounts({
+          proposer: owner1.publicKey,
+          multisig: multisigPda,
+          transaction: newTransactionPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([owner1])
+        .rpc();
+
+      // Only get 1 approval (need 2)
+      await program.methods
+        .approveTransaction(new anchor.BN(newTransactionId))
+        .accounts({
+          approver: owner2.publicKey,
+          multisig: multisigPda,
+          transaction: newTransactionPda,
+        })
+        .signers([owner2])
+        .rpc();
+
+      // Wait a slot
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      try {
+        await program.methods
+          .executeTransaction(new anchor.BN(newTransactionId))
+          .accounts({
+            executor: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: newTransactionPda,
+          })
+          .signers([owner1])
+          .rpc();
+
+        expect.fail("Should have failed with insufficient approvals");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("NotEnoughApprovals");
+        console.log("✅ Correctly rejected insufficient approvals");
+      }
+    });
+
+    it("❌ Should fail execution by non-owner", async () => {
+      // Create another transaction for this test
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      const currentNonce = multisig.nonce.toNumber();
+      const newTransactionId = multisig.transactionCount.toNumber();
+
+      const [newTransactionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
+      );
+
+      // Propose and fully approve transaction
+      await program.methods
+        .proposeTransaction(
+          Array.from(testInstruction),
+          new anchor.BN(currentNonce),
+          { transfer: {} },
+          72
+        )
+        .accounts({
+          proposer: owner1.publicKey,
+          multisig: multisigPda,
+          transaction: newTransactionPda,
+          systemProgram: SystemProgram.programId,
+        })
         .signers([owner1])
         .rpc();
 
       await program.methods
-        .approveTransaction(newTransactionId)
+        .approveTransaction(new anchor.BN(newTransactionId))
         .accounts({
           approver: owner2.publicKey,
-          multisig: multisigPDA,
-          transaction: newTransactionPDA,
-        } as any)
+          multisig: multisigPda,
+          transaction: newTransactionPda,
+        })
         .signers([owner2])
         .rpc();
 
+      // Wait a slot
+      await new Promise(resolve => setTimeout(resolve, 500));
 
-      await expectAnchorError(
-        program.methods
-          .executeTransaction(newTransactionId)
+      try {
+        await program.methods
+          .executeTransaction(new anchor.BN(newTransactionId))
           .accounts({
-            executor: owner1.publicKey,
-            multisig: multisigPDA,
-            transaction: newTransactionPDA,
-          } as any)
-          .signers([owner1])
-          .rpc(),
-        "Not enough approvals"
-      );
-      console.log("✅ Correctly rejected execution with not enough approvals");
+            executor: nonOwner.publicKey,
+            multisig: multisigPda,
+            transaction: newTransactionPda,
+          })
+          .signers([nonOwner])
+          .rpc();
+
+        expect.fail("Should have failed with non-owner executor");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("OwnerNotFound");
+        console.log("✅ Correctly rejected non-owner executor");
+      }
+    });
+  });
+
+  describe("🚨 5. Emergency Controls", () => {
+    it("✅ Should pause multisig successfully", async () => {
+      const tx = await program.methods
+        .emergencyPause()
+        .accounts({
+          caller: owner1.publicKey,
+          multisig: multisigPda,
+        })
+        .signers([owner1])
+        .rpc();
+
+      console.log("📜 Emergency pause tx:", tx);
+
+      // Verify paused state
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      expect(multisig.paused).to.be.true;
+      expect(multisig.pausedBy.toString()).to.equal(owner1.publicKey.toString());
+
+      console.log("✅ Multisig paused successfully!");
     });
 
-    it("Should fail with invalid transaction ID", async () => {
-      const invalidTransactionId = new BN(999);
-      const [invalidTransactionPDA] = findTransactionPDA(multisigPDA, 999);
+    it("❌ Should fail to propose when paused", async () => {
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      const currentNonce = multisig.nonce.toNumber();
 
-      await expectAnchorError(
-        program.methods
-          .executeTransaction(invalidTransactionId)
-          .accounts({
-            executor: owner1.publicKey,
-            multisig: multisigPDA,
-            transaction: invalidTransactionPDA,
-
-          } as any)
-          .signers([owner1])
-          .rpc(),
-        "AccountNotInitialized" // Account doesn't exist
+      const [transactionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
       );
 
-      console.log("✅ Correctly rejected execution with invalid transaction ID");
-    })
-  })
+      try {
+        await program.methods
+          .proposeTransaction(
+            Array.from(testInstruction),
+            new anchor.BN(currentNonce),
+            { transfer: {} },
+            72
+          )
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([owner1])
+          .rpc();
+
+        expect.fail("Should have failed when multisig is paused");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("MultisigPaused");
+        console.log("✅ Correctly rejected transaction when paused");
+      }
+    });
+
+    it("✅ Should unpause multisig with admin approval", async () => {
+      // Create unpause transaction
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      const currentNonce = multisig.nonce.toNumber();
+      const transactionId = multisig.transactionCount.toNumber();
+
+      const [transactionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
+      );
+
+      // Create the unpause transaction (admin action)
+      await program.methods
+        .proposeTransaction(
+          Array.from(Buffer.from("unpause")),
+          new anchor.BN(currentNonce),
+          { adminAction: {} },
+          72
+        )
+        .accounts({
+          proposer: owner1.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([owner1])
+        .rpc();
+
+      // Get all 3 admin approvals (admin_threshold = 3)
+      await program.methods
+        .approveTransaction(new anchor.BN(transactionId))
+        .accounts({
+          approver: owner1.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+        })
+        .signers([owner1])
+        .rpc();
+
+      await program.methods
+        .approveTransaction(new anchor.BN(transactionId))
+        .accounts({
+          approver: owner2.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+        })
+        .signers([owner2])
+        .rpc();
+
+      await program.methods
+        .approveTransaction(new anchor.BN(transactionId))
+        .accounts({
+          approver: owner3.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+        })
+        .signers([owner3])
+        .rpc();
+
+      // Now unpause
+      const tx = await program.methods
+        .unpause(new anchor.BN(transactionId))
+        .accounts({
+          multisig: multisigPda,
+          transaction: transactionPda,
+        })
+        .rpc();
+
+      console.log("📜 Unpause tx:", tx);
+
+      // Verify unpaused state
+      const updatedMultisig = await program.account.multisig.fetch(multisigPda);
+      expect(updatedMultisig.paused).to.be.false;
+      expect(updatedMultisig.pausedBy.toString()).to.equal(SystemProgram.programId.toString());
+
+      console.log("✅ Multisig unpaused successfully!");
+    });
+
+    it("❌ Should fail emergency pause by non-owner", async () => {
+      try {
+        await program.methods
+          .emergencyPause()
+          .accounts({
+            caller: nonOwner.publicKey,
+            multisig: multisigPda,
+          })
+          .signers([nonOwner])
+          .rpc();
+
+        expect.fail("Should have failed with non-owner caller");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("OwnerNotFound");
+        console.log("✅ Correctly rejected non-owner emergency pause");
+      }
+    });
+  });
+
+  describe("👥 6. Admin Functions", () => {
+    describe("🔧 Change Threshold", () => {
+      it("✅ Should change threshold with admin approval", async () => {
+        // Create change threshold transaction
+        const multisig = await program.account.multisig.fetch(multisigPda);
+        const currentNonce = multisig.nonce.toNumber();
+        const transactionId = multisig.transactionCount.toNumber();
+
+        const [transactionPda] = PublicKey.findProgramAddressSync(
+          [
+            Buffer.from("transaction"),
+            multisigPda.toBuffer(),
+            Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+          ],
+          program.programId
+        );
+
+        // Propose change threshold transaction
+        await program.methods
+          .proposeTransaction(
+            Array.from(Buffer.from("change_threshold")),
+            new anchor.BN(currentNonce),
+            { adminAction: {} },
+            72
+          )
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([owner1])
+          .rpc();
+
+        // Get all 3 admin approvals
+        for (const owner of [owner1, owner2, owner3]) {
+          await program.methods
+            .approveTransaction(new anchor.BN(transactionId))
+            .accounts({
+              approver: owner.publicKey,
+              multisig: multisigPda,
+              transaction: transactionPda,
+            })
+            .signers([owner])
+            .rpc();
+        }
+
+        // Change threshold to 3
+        const tx = await program.methods
+          .changeThreshold(new anchor.BN(transactionId), 3)
+          .accounts({
+            multisig: multisigPda,
+            transaction: transactionPda,
+          })
+          .rpc();
+
+        console.log("📜 Change threshold tx:", tx);
+
+        // Verify threshold changed
+        const updatedMultisig = await program.account.multisig.fetch(multisigPda);
+        expect(updatedMultisig.threshold).to.equal(3);
+
+        console.log("✅ Threshold changed successfully!");
+      });
+
+      it("❌ Should fail change threshold with invalid value", async () => {
+        // Create change threshold transaction
+        const multisig = await program.account.multisig.fetch(multisigPda);
+        const currentNonce = multisig.nonce.toNumber();
+        const transactionId = multisig.transactionCount.toNumber();
+
+        const [transactionPda] = PublicKey.findProgramAddressSync(
+          [
+            Buffer.from("transaction"),
+            multisigPda.toBuffer(),
+            Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+          ],
+          program.programId
+        );
+
+        // Propose change threshold transaction
+        await program.methods
+          .proposeTransaction(
+            Array.from(Buffer.from("change_threshold")),
+            new anchor.BN(currentNonce),
+            { adminAction: {} },
+            72
+          )
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([owner1])
+          .rpc();
+
+        // Get all 3 admin approvals
+        for (const owner of [owner1, owner2, owner3]) {
+          await program.methods
+            .approveTransaction(new anchor.BN(transactionId))
+            .accounts({
+              approver: owner.publicKey,
+              multisig: multisigPda,
+              transaction: transactionPda,
+            })
+            .signers([owner])
+            .rpc();
+        }
+
+        try {
+          await program.methods
+            .changeThreshold(new anchor.BN(transactionId), 0) // Invalid threshold
+            .accounts({
+              multisig: multisigPda,
+              transaction: transactionPda,
+            })
+            .rpc();
+
+          expect.fail("Should have failed with invalid threshold");
+        } catch (error) {
+          expect(error.error.errorCode.code).to.equal("InvalidThreshold");
+          console.log("✅ Correctly rejected invalid threshold");
+        }
+      });
+    });
+
+    describe("➕ Add Owner", () => {
+      it("✅ Should add owner with admin approval", async () => {
+        // Create add owner transaction
+        const multisig = await program.account.multisig.fetch(multisigPda);
+        const currentNonce = multisig.nonce.toNumber();
+        const transactionId = multisig.transactionCount.toNumber();
+
+        const [transactionPda] = PublicKey.findProgramAddressSync(
+          [
+            Buffer.from("transaction"),
+            multisigPda.toBuffer(),
+            Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+          ],
+          program.programId
+        );
+
+        // Propose add owner transaction
+        await program.methods
+          .proposeTransaction(
+            Array.from(Buffer.from("add_owner")),
+            new anchor.BN(currentNonce),
+            { adminAction: {} },
+            72
+          )
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([owner1])
+          .rpc();
+
+        // Get all 3 admin approvals
+        for (const owner of [owner1, owner2, owner3]) {
+          await program.methods
+            .approveTransaction(new anchor.BN(transactionId))
+            .accounts({
+              approver: owner.publicKey,
+              multisig: multisigPda,
+              transaction: transactionPda,
+            })
+            .signers([owner])
+            .rpc();
+        }
+
+        // Add new owner
+        const tx = await program.methods
+          .addOwner(new anchor.BN(transactionId), owner4.publicKey)
+          .accounts({
+            multisig: multisigPda,
+            transaction: transactionPda,
+          })
+          .rpc();
+
+        console.log("📜 Add owner tx:", tx);
+
+        // Verify owner added
+        const updatedMultisig = await program.account.multisig.fetch(multisigPda);
+        expect(updatedMultisig.owners).to.have.lengthOf(4);
+        expect(updatedMultisig.owners.map(o => o.toString())).to.include(owner4.publicKey.toString());
+
+        console.log("✅ Owner added successfully!");
+      });
+
+      it("❌ Should fail to add duplicate owner", async () => {
+        // Create add owner transaction for existing owner
+        const multisig = await program.account.multisig.fetch(multisigPda);
+        const currentNonce = multisig.nonce.toNumber();
+        const transactionId = multisig.transactionCount.toNumber();
+
+        const [transactionPda] = PublicKey.findProgramAddressSync(
+          [
+            Buffer.from("transaction"),
+            multisigPda.toBuffer(),
+            Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+          ],
+          program.programId
+        );
+
+        // Propose add owner transaction
+        await program.methods
+          .proposeTransaction(
+            Array.from(Buffer.from("add_owner")),
+            new anchor.BN(currentNonce),
+            { adminAction: {} },
+            72
+          )
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([owner1])
+          .rpc();
+
+        // Get all 3 admin approvals
+        for (const owner of [owner1, owner2, owner3]) {
+          await program.methods
+            .approveTransaction(new anchor.BN(transactionId))
+            .accounts({
+              approver: owner.publicKey,
+              multisig: multisigPda,
+              transaction: transactionPda,
+            })
+            .signers([owner])
+            .rpc();
+        }
+
+        try {
+          await program.methods
+            .addOwner(new anchor.BN(transactionId), owner1.publicKey) // Duplicate owner
+            .accounts({
+              multisig: multisigPda,
+              transaction: transactionPda,
+            })
+            .rpc();
+
+          expect.fail("Should have failed with duplicate owner");
+        } catch (error) {
+          expect(error.error.errorCode.code).to.equal("DuplicateOwners");
+          console.log("✅ Correctly rejected duplicate owner");
+        }
+      });
+    });
+
+    describe("➖ Remove Owner", () => {
+      it("✅ Should remove owner with admin approval", async () => {
+        // Create remove owner transaction
+        const multisig = await program.account.multisig.fetch(multisigPda);
+        const currentNonce = multisig.nonce.toNumber();
+        const transactionId = multisig.transactionCount.toNumber();
+
+        const [transactionPda] = PublicKey.findProgramAddressSync(
+          [
+            Buffer.from("transaction"),
+            multisigPda.toBuffer(),
+            Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+          ],
+          program.programId
+        );
+
+        // Propose remove owner transaction
+        await program.methods
+          .proposeTransaction(
+            Array.from(Buffer.from("remove_owner")),
+            new anchor.BN(currentNonce),
+            { adminAction: {} },
+            72
+          )
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([owner1])
+          .rpc();
+
+        // Get all 3 admin approvals (current admin threshold)
+        for (const owner of [owner1, owner2, owner3]) {
+          await program.methods
+            .approveTransaction(new anchor.BN(transactionId))
+            .accounts({
+              approver: owner.publicKey,
+              multisig: multisigPda,
+              transaction: transactionPda,
+            })
+            .signers([owner])
+            .rpc();
+        }
+
+        // Remove owner4 (recently added)
+        const tx = await program.methods
+          .removeOwner(new anchor.BN(transactionId), owner4.publicKey)
+          .accounts({
+            multisig: multisigPda,
+            transaction: transactionPda,
+          })
+          .rpc();
+
+        console.log("📜 Remove owner tx:", tx);
+
+        // Verify owner removed
+        const updatedMultisig = await program.account.multisig.fetch(multisigPda);
+        expect(updatedMultisig.owners).to.have.lengthOf(3);
+        expect(updatedMultisig.owners.map(o => o.toString())).to.not.include(owner4.publicKey.toString());
+
+        console.log("✅ Owner removed successfully!");
+      });
+
+      it("❌ Should fail to remove non-existent owner", async () => {
+        // Create remove owner transaction
+        const multisig = await program.account.multisig.fetch(multisigPda);
+        const currentNonce = multisig.nonce.toNumber();
+        const transactionId = multisig.transactionCount.toNumber();
+
+        const [transactionPda] = PublicKey.findProgramAddressSync(
+          [
+            Buffer.from("transaction"),
+            multisigPda.toBuffer(),
+            Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+          ],
+          program.programId
+        );
+
+        // Propose remove owner transaction
+        await program.methods
+          .proposeTransaction(
+            Array.from(Buffer.from("remove_owner")),
+            new anchor.BN(currentNonce),
+            { adminAction: {} },
+            72
+          )
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([owner1])
+          .rpc();
+
+        // Get all 3 admin approvals
+        for (const owner of [owner1, owner2, owner3]) {
+          await program.methods
+            .approveTransaction(new anchor.BN(transactionId))
+            .accounts({
+              approver: owner.publicKey,
+              multisig: multisigPda,
+              transaction: transactionPda,
+            })
+            .signers([owner])
+            .rpc();
+        }
+
+        try {
+          await program.methods
+            .removeOwner(new anchor.BN(transactionId), nonOwner.publicKey) // Non-existent owner
+            .accounts({
+              multisig: multisigPda,
+              transaction: transactionPda,
+            })
+            .rpc();
+
+          expect.fail("Should have failed with non-existent owner");
+        } catch (error) {
+          expect(error.error.errorCode.code).to.equal("OwnerNotFound");
+          console.log("✅ Correctly rejected non-existent owner removal");
+        }
+      });
+    });
+  });
+
+  describe("⏰ 7. Rate Limiting & DOS Protection", () => {
+    it("❌ Should fail rapid transaction proposals", async () => {
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      const currentNonce = multisig.nonce.toNumber();
+
+      const [transactionPda1] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
+      );
+
+      // First proposal should succeed
+      await program.methods
+        .proposeTransaction(
+          Array.from(testInstruction),
+          new anchor.BN(currentNonce),
+          { transfer: {} },
+          72
+        )
+        .accounts({
+          proposer: owner1.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda1,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([owner1])
+        .rpc();
+
+      // Immediate second proposal should fail (rate limit)
+      const updatedMultisig = await program.account.multisig.fetch(multisigPda);
+      const newNonce = updatedMultisig.nonce.toNumber();
+
+      const [transactionPda2] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(updatedMultisig.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
+      );
+
+      try {
+        await program.methods
+          .proposeTransaction(
+            Array.from(testInstruction),
+            new anchor.BN(newNonce),
+            { transfer: {} },
+            72
+          )
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda2,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([owner1])
+          .rpc();
+
+        expect.fail("Should have failed due to rate limiting");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("RateLimitExceeded");
+        console.log("✅ Rate limiting working correctly!");
+      }
+    });
+
+    it("❌ Should fail with overly complex transaction", async () => {
+      // Wait for rate limit to pass
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      const currentNonce = multisig.nonce.toNumber();
+
+      const [transactionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
+      );
+
+      // Create artificially complex instruction data
+      const complexData = Array.from({ length: 500 }, (_, i) => {
+        // Create patterns that will increase complexity score
+        if (i % 4 === 0) return (1000000 >> 0) & 0xFF;
+        if (i % 4 === 1) return (1000000 >> 8) & 0xFF;
+        if (i % 4 === 2) return (1000000 >> 16) & 0xFF;
+        if (i % 4 === 3) return (1000000 >> 24) & 0xFF;
+        return i % 256;
+      });
+
+      try {
+        await program.methods
+          .proposeTransaction(
+            complexData,
+            new anchor.BN(currentNonce),
+            { transfer: {} },
+            72
+          )
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([owner1])
+          .rpc();
+
+        expect.fail("Should have failed due to transaction complexity");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("TransactionTooComplex");
+        console.log("✅ Complexity limiting working correctly!");
+      }
+    });
+  });
+
+  describe("⏳ 8. Transaction Expiration", () => {
+    it("❌ Should fail to execute expired transaction", async () => {
+      // Wait for rate limit to pass
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      const currentNonce = multisig.nonce.toNumber();
+      const transactionId = multisig.transactionCount.toNumber();
+
+      const [transactionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
+      );
+
+      // Create transaction with very short expiration (1 hour)
+      await program.methods
+        .proposeTransaction(
+          Array.from(testInstruction),
+          new anchor.BN(currentNonce),
+          { transfer: {} },
+          0 // expires immediately (0 hours)
+        )
+        .accounts({
+          proposer: owner1.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([owner1])
+        .rpc();
+
+      // Get enough approvals
+      await program.methods
+        .approveTransaction(new anchor.BN(transactionId))
+        .accounts({
+          approver: owner2.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+        })
+        .signers([owner2])
+        .rpc();
+
+      await program.methods
+        .approveTransaction(new anchor.BN(transactionId))
+        .accounts({
+          approver: owner3.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+        })
+        .signers([owner3])
+        .rpc();
+
+      // Wait a bit for expiration
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      try {
+        await program.methods
+          .executeTransaction(new anchor.BN(transactionId))
+          .accounts({
+            executor: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+          })
+          .signers([owner1])
+          .rpc();
+
+        expect.fail("Should have failed with expired transaction");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("TransactionExpired");
+        console.log("✅ Transaction expiration working correctly!");
+      }
+    });
+  });
+
+  describe("📊 9. State Validation & Integrity", () => {
+    it("✅ Should maintain consistent state throughout operations", async () => {
+      const multisig = await program.account.multisig.fetch(multisigPda);
+
+      // Verify state integrity
+      expect(multisig.owners).to.have.lengthOf(3);
+      expect(multisig.threshold).to.equal(3);
+      expect(multisig.adminThreshold).to.equal(3);
+      expect(multisig.paused).to.be.false;
+      expect(multisig.transactionCount.toNumber()).to.be.greaterThan(0);
+      expect(multisig.nonce.toNumber()).to.be.greaterThan(0);
+
+      // Verify no duplicate owners
+      const ownerStrings = multisig.owners.map(o => o.toString());
+      const uniqueOwners = [...new Set(ownerStrings)];
+      expect(uniqueOwners).to.have.lengthOf(ownerStrings.length);
+
+      // Verify thresholds are valid
+      expect(multisig.threshold).to.be.at.most(multisig.owners.length);
+      expect(multisig.adminThreshold).to.be.at.most(multisig.owners.length);
+      expect(multisig.adminThreshold).to.be.at.least(multisig.threshold);
+
+      console.log("✅ State integrity verified!");
+    });
+
+    it("✅ Should prevent same-slot execution", async () => {
+      // Wait for rate limit
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      const currentNonce = multisig.nonce.toNumber();
+      const transactionId = multisig.transactionCount.toNumber();
+
+      const [transactionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
+      );
+
+      // Propose transaction
+      await program.methods
+        .proposeTransaction(
+          Array.from(testInstruction),
+          new anchor.BN(currentNonce),
+          { transfer: {} },
+          72
+        )
+        .accounts({
+          proposer: owner1.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([owner1])
+        .rpc();
+
+      // Get all required approvals
+      for (const owner of [owner1, owner2, owner3]) {
+        await program.methods
+          .approveTransaction(new anchor.BN(transactionId))
+          .accounts({
+            approver: owner.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+          })
+          .signers([owner])
+          .rpc();
+      }
+
+      // Try to execute immediately (same slot) - should fail
+      try {
+        await program.methods
+          .executeTransaction(new anchor.BN(transactionId))
+          .accounts({
+            executor: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+          })
+          .signers([owner1])
+          .rpc();
+
+        expect.fail("Should have failed due to same-slot execution");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("SameSlotExecution");
+        console.log("✅ Same-slot execution protection working!");
+      }
+    });
+  });
+
+  describe("🔒 10. Nonce & Replay Protection", () => {
+    it("❌ Should prevent nonce reuse", async () => {
+      const multisig = await program.account.multisig.fetch(multisigPda);
+      const oldNonce = multisig.nonce.toNumber() - 1; // Use old nonce
+
+      const [transactionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(multisig.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
+      );
+
+      try {
+        await program.methods
+          .proposeTransaction(
+            Array.from(testInstruction),
+            new anchor.BN(oldNonce), // Reusing old nonce
+            { transfer: {} },
+            72
+          )
+          .accounts({
+            proposer: owner1.publicKey,
+            multisig: multisigPda,
+            transaction: transactionPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([owner1])
+          .rpc();
+
+        expect.fail("Should have failed with reused nonce");
+      } catch (error) {
+        expect(error.error.errorCode.code).to.equal("InvalidNonce");
+        console.log("✅ Nonce replay protection working!");
+      }
+    });
+
+    it("✅ Should increment nonce correctly", async () => {
+      const multisigBefore = await program.account.multisig.fetch(multisigPda);
+      const nonceBefore = multisigBefore.nonce.toNumber();
+
+      // Wait for rate limit
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      const [transactionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("transaction"),
+          multisigPda.toBuffer(),
+          Buffer.from(multisigBefore.transactionCount.toArrayLike(Buffer, "le", 8))
+        ],
+        program.programId
+      );
+
+      await program.methods
+        .proposeTransaction(
+          Array.from(testInstruction),
+          new anchor.BN(nonceBefore),
+          { transfer: {} },
+          72
+        )
+        .accounts({
+          proposer: owner1.publicKey,
+          multisig: multisigPda,
+          transaction: transactionPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([owner1])
+        .rpc();
+
+      const multisigAfter = await program.account.multisig.fetch(multisigPda);
+      const nonceAfter = multisigAfter.nonce.toNumber();
+
+      expect(nonceAfter).to.equal(nonceBefore + 1);
+      console.log("✅ Nonce incremented correctly!");
+    });
+  });
+
 })
