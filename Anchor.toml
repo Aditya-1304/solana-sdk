@@ -3,6 +3,7 @@ members = [
   "token-module",
   "multisig-module",
   "common-utils",
+  "governance-module"
 ]
 
 
@@ -24,6 +25,7 @@ wallet = "~/.config/solana/id.json"
 token_module       = "DDnDEV5j1HkJzzV94sLaEi11e2CjXfTFRpQv1amgLxTr"
 multisig_module    = "8qzfg49CMM4u8UG6LaVhT4WuHC1CrgnrE8jYBzMFgvuZ"
 common_utils       = "Ai4JnBGB2qmd5LJFcSTKwwwEp2tBYfXLbAt4pC54dGh6"
+governance_module  = "J5q2xymUufzUCvKT8gKwYpaNRqJQBz7xaAeuM29vxTw5"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
