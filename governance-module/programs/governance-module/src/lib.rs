@@ -131,3 +131,163 @@ pub enum VoteType {
     Against,
     Abstain
 }
+
+#[derive(Accounts)]
+#[instruction(name: String, description: String)]
+pub struct CreateGovernance<'info> {
+    #[account(
+        mut
+    )]
+    pub authority: Signer<'info>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + 32 + 4 + name.len() + 4 + description.len() + 150 + 8 + 8 + 1 + 8 + 1, // Discriminator + keys + strings + config + counters + flags + timestamps + bump
+        seeds = [b"governance", authority.key().as_ref()],
+        bump,
+    )]
+    pub governance: Account<'info, Governance>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(title: String, description: String)]
+pub struct CreateProposal<'info> {
+    #[account(
+        mut
+    )]
+    pub proposer: Signer<'info>,
+
+    #[account(
+        mut
+    )]
+    pub governance: Account<'info, Governance>,
+
+    #[account(
+        init,
+        payer = proposer,
+        space = 8 +
+                32 + 
+                8 +
+                32 + 
+                4 + 
+                title.len() + 
+                4 + 
+                description.len() + 
+                150 + 
+                1000 + 
+                8*4 +
+                8*4 +
+                4 +
+                1+
+                1 +
+                9 +
+                1 +
+                4 +
+                256 +
+                1 ,// Discriminator + keys + strings + proposal type + instruction data + timing + vote tracking + status + execution flags + cancellation reason + bump
+        seeds = [b"proposal", governance.key().as_ref(), &governance.proposal_count.to_le_bytes()],
+        bump,
+    )]
+    pub proposal: Account<'info, Proposal>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(proposal_id: u64)]
+pub struct Vote<'info> {
+    #[account(
+        mut
+    )]
+    pub voter: Signer<'info>,
+
+    pub governance: Account<'info, Governance>,
+
+    #[account(
+        mut,
+        seeds = [b"proposal", governance.key().as_ref(), &proposal_id.to_le_bytes()],
+        bump,
+    )]
+    pub proposal: Account<'info, Proposal>,
+
+    #[account(
+        init,
+        payer = voter,
+        space = 8 +
+                32 +
+                8 +
+                32 +
+                1 +
+                8 +
+                8 +
+                1 +
+                32 +
+                1,
+        seeds = [b"vote", proposal.key().as_ref(), voter.key().as_ref()],
+        bump,
+    )]
+    pub vote_record: Account<'info, VoteRecord>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(proposal_id: u64)]
+pub struct ExecuteProposal<'info> {
+    pub executor: Signer<'info>,
+
+    pub governance: Account<'info, Governance>,
+
+    #[account(
+        mut,
+        seeds = [b"proposal", governance.key().as_ref(), &proposal_id.to_le_bytes()],
+        bump = proposal.bump,
+    )]
+    pub proposal: Account<'info, Proposal>,
+}
+
+#[derive(Accounts)]
+#[instruction(proposal_id: u64)]
+pub struct CancelProposal<'info> {
+    pub canceller: Signer<'info>,
+
+    pub governance: Account<'info, Governance>,
+
+    #[account(
+        mut,
+        seeds = [b"proposal", governance.key().as_ref(), &proposal_id.to_le_bytes()],
+        bump = proposal.bump,
+    )]
+    pub proposal: Account<'info, Proposal>,
+}
+
+#[derive(Accounts)]
+pub struct EmergencyPause<'info> {
+    pub caller: Signer<'info>,
+
+    #[account(mut)]
+    pub governance: Account<'info, Governance>,
+}
+
+#[derive(Accounts)]
+pub struct Unpause<'info> {
+    pub caller: Signer<'info>,
+
+    #[account(mut)]
+    pub governance: Account<'info, Governance>,
+}
+
+#[derive(Accounts)]
+#[instruction(proposal_id: u64)]
+pub struct UpdateGovernanceConfig<'info> {
+    #[account(mut)]
+    pub governance: Account<'info, Governance>,
+
+    #[account(
+        seeds = [b"governance", governance.key().as_ref(), &proposal_id.to_le_bytes()],
+        bump = governance.bump,
+    )]
+    pub proposal: Account<'info, Proposal>,
+}
+
