@@ -226,7 +226,6 @@ pub struct Transaction {
 }
 
 
-
 impl Transaction {
     pub fn is_expired(&self) -> Result<bool> {
         let clock = Clock::get()?;
@@ -234,7 +233,10 @@ impl Transaction {
     }
 
     pub fn validate_state(&self, multisig: &Multisig) -> Result<()> {
-        require!(!self.is_expired()?, MultisigError::TransactionExpired);
+        // ✅ FIXED: Don't check expiration for already executed transactions
+        if !self.executed {
+            require!(!self.is_expired()?, MultisigError::TransactionExpired);
+        }
         require!(
             self.approvals.len() == multisig.owners.len(),
             MultisigError::ApprovalArrayMismatch
@@ -265,9 +267,7 @@ impl Transaction {
         false
     }
 
-
     pub fn is_admin_ready_to_execute(&self, admin_threshold: u8) -> bool {
         self.is_ready_to_execute(admin_threshold)
     }
 }
-
