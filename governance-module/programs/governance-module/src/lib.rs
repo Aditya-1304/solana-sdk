@@ -355,3 +355,46 @@ pub struct GovernanceConfigUpdated {
     pub new_config: GovernanceConfig,
 }
 
+#[error_code]
+pub enum GovernanceError {
+    #[msg("Name too long")]
+    NameTooLong,
+    #[msg("Description too long")]
+    DescriptionTooLong,
+    #[msg("Invalid quorum percentage")]
+    InvalidQuorum,
+    #[msg("Invalid voting period")]
+    InvalidVotingPeriod,
+    #[msg("Governance is paused")]
+    GovernancePaused,
+    #[msg("Title too long")]
+    TitleTooLong,
+    #[msg("Empty instruction")]
+    EmptyInstruction,
+    #[msg("Instruction too large")]
+    InstructionTooLarge,
+    #[msg("Insufficient voting power")]
+    InsufficientVotingPower,
+    #[msg("Proposal not active")]
+    ProposalNotActive,
+    #[msg("Voting period ended")]
+    VotingPeriodEnded,
+    #[msg("No voting power")]
+    NoVotingPower,
+    #[msg("Proposal not passed")]
+    ProposalNotPassed,
+    #[msg("Already executed")]
+    AlreadyExecuted,
+    #[msg("Execution delay not met")]
+    ExecutionDelayNotMet,
+    #[msg("Unauthorized")]
+    Unauthorized,
+    #[msg("Reason too long")]
+    ReasonTooLong,
+    #[msg("Invalid proposal")]
+    InvalidProposal,
+    #[msg("Proposal not executed")]
+    ProposalNotExecuted,
+    #[msg("Invalid proposal type")]
+    InvalidProposalType,
+}
