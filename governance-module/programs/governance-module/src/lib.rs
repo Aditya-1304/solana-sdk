@@ -4,6 +4,8 @@ declare_id!("HJzW17DkivXRYjirjDD56a3Pve6JFnKhmsfpswJQ3St4");
 
 #[program]
 pub mod governance_module {
+    use std::f32::consts::E;
+
     use super::*;
 
     pub fn create_governance(
@@ -114,7 +116,65 @@ pub mod governance_module {
     }
 
 
-    
+    pub fn vote(
+        ctx: Context<Vote>,
+        proposal_id: u64,
+        vote_type: VoteType,
+    ) -> Result<()> {
+        let governance = &ctx.accounts.governance;
+        let proposal = &mut ctx.accounts.proposal;
+        let vote_record = &mut ctx.accounts.vote_record;
+        let clock = Clock::get()?;
+
+        require!(proposal.status == ProposalStatus::Active, GovernanceError::ProposalNotActive);
+        require!(
+            clock.unix_timestamp >= proposal.voting_start_time &&
+            clock.unix_timestamp <= proposal.voting_end_time,
+            GovernanceError::VotingPeriodEnded
+        );
+
+        require!(!governance.paused, GovernanceError::GovernancePaused);
+
+        let voting_power = match governance.config.voting_type {
+            VotingType::Equal => 1u64,
+            VotingType::TokenWeighted => {
+
+
+                10u64 // Placeholder for token-weighted voting power logic
+            }
+        };
+
+        require!(voting_power > 0, GovernanceError::NoVotingPower);
+
+        vote_record.governance = governance.key();
+        vote_record.proposal_id = proposal_id;
+        vote_record.voter = ctx.accounts.voter.key();
+        vote_record.vote_type = vote_type.clone();
+        vote_record.voting_power = voting_power as i64;
+        vote_record.timestamp = clock.unix_timestamp;
+        vote_record.bump = ctx.bumps.vote_record;
+
+        match vote_type {
+            VoteType::For => proposal.votes_for += voting_power,
+            VoteType::Against => proposal.votes_against += voting_power,
+            VoteType::Abstain => proposal.votes_abstain += voting_power,
+        }
+
+        proposal.unique_voters += 1;
+
+        self::check_and_finalize_proposal(proposal, governance)?;
+
+        emit!(VoteCast {
+            governance: governance.key(),
+            proposal: proposal.key(),
+            voter: vote_record.voter,
+            vote_type: vote_record.vote_type.clone(),
+            voting_power: voting_power,
+        });
+
+        msg!("Vote cast: {:?} with power: {}", vote_type, voting_power);
+        Ok(())
+    }
 }
 
 
@@ -230,7 +290,7 @@ pub enum ProposalStatus {
     Cancelled,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Debug)]
 pub enum VoteType {
     For,
     Against,
