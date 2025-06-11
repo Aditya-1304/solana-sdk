@@ -6,8 +6,38 @@ declare_id!("HJzW17DkivXRYjirjDD56a3Pve6JFnKhmsfpswJQ3St4");
 pub mod governance_module {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        msg!("Greetings from: {:?}", ctx.program_id);
+    pub fn create_governance(
+        ctx: Context<CreateGovernance>,
+        name: String,
+        description: String,
+        config: GovernanceConfig
+    ) -> Result<()> {
+        let governance = &mut ctx.accounts.governance;
+        let clock = Clock::get()?;
+
+        require!(name.len() <= 64, GovernanceError::NameTooLong);
+        require!(description.len() <= 256, GovernanceError::DescriptionTooLong);
+        require!(config.quorum_percentage <= 100, GovernanceError::InvalidQuorum);
+        require!(config.voting_period_hours > 0, GovernanceError::InvalidVotingPeriod);
+
+        governance.authority = ctx.accounts.authority.key();
+        governance.name = name;
+        governance.description = description;
+        governance.config = config;
+        governance.proposal_count = 0;
+        governance.total_voting_power = 0;
+        governance.paused = false;
+        governance.created_at = clock.unix_timestamp;
+        governance.bump = ctx.bumps.governance;
+
+        emit!(GovernanceCreated {
+            governance: governance.key(),
+            authority: governance.authority,
+            name: governance.name.clone(),
+            config: governance.config.clone(),
+        });
+
+        msg!("Governance '{}' created successfully!", governance.name);
         Ok(())
     }
 }
