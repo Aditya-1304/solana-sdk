@@ -40,6 +40,81 @@ pub mod governance_module {
         msg!("Governance '{}' created successfully!", governance.name);
         Ok(())
     }
+
+    pub fn create_proposal(
+        ctx: Context<CreateProposal>,
+        title: String,
+        description: String,
+        proposal_type: ProposalType,
+        instruction_data: Vec<u8>,
+    ) -> Result<()> {
+        let governance = &mut ctx.accounts.governance;
+        let proposal = &mut ctx.accounts.proposal;
+        let clock = Clock::get()?;
+
+        require!(!governance.paused, GovernanceError::GovernancePaused);
+
+        require!(title.len() <= 128, GovernanceError::TitleTooLong);
+        require!(description.len() <= 1024, GovernanceError::DescriptionTooLong);
+        require!(!instruction_data.is_empty(), GovernanceError::EmptyInstruction);
+        require!(instruction_data.len() <= 1232, GovernanceError::InstructionTooLarge);
+
+        let proposer_voting_power = match governance.config.voting_type {
+            VotingType::Equal => 1,
+            VotingType::TokenWeighted => {
+
+                governance.config.min_voting_power_to_propose.max(1)
+            }
+        };
+
+        require!(
+            proposer_voting_power >= governance.config.min_voting_power_to_propose,
+            GovernanceError::InsufficientVotingPower
+        );
+
+        proposal.governance = governance.key();
+        proposal.proposal_id = governance.proposal_count;
+        proposal.proposer = ctx.accounts.proposer.key();
+        proposal.title = title;
+        proposal.description = description;
+        proposal.proposal_type = proposal_type;
+        proposal.instruction_data = instruction_data;
+
+
+        proposal.created_at = clock.unix_timestamp;
+        proposal.voting_start_time = clock.unix_timestamp;
+        proposal.voting_end_time = clock.unix_timestamp + (governance.config.voting_period_hours as i64 * 3600);
+
+        proposal.execution_delay_hours = governance.config.execution_delay_hours as u64;
+
+
+        proposal.votes_for = 0;
+        proposal.votes_against = 0;
+        proposal.votes_abstain = 0;
+        proposal.unique_voters = 0;
+
+        
+        proposal.status = ProposalStatus::Active;
+        proposal.executed = false;
+        proposal.bump = ctx.bumps.proposal;
+
+        governance.proposal_count += 1;
+
+        emit!(ProposalCreated {
+            governance: governance.key(),
+            proposal: proposal.key(),
+            proposal_id: proposal.proposal_id,
+            proposer: proposal.proposer,
+            title: proposal.title.clone(),
+            proposal_type: proposal.proposal_type.clone(),
+        });
+
+        msg!("Proposal '{}' created with ID: {}", proposal.title, proposal.proposal_id);
+        Ok(())
+    }
+
+
+    
 }
 
 
