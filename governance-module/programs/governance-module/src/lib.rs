@@ -226,6 +226,76 @@ pub mod governance_module {
         msg!("Proposal {} executed successfully", proposal_id);
         Ok(())
     }
+
+    pub fn cancel_proposal(
+        ctx: Context<CancelProposal>,
+        proposal_id: u64,
+        reason: String,
+    ) -> Result<()> {
+        let governance = &ctx.accounts.governance;
+        let proposal = &mut ctx.accounts.proposal;
+
+        require!(
+            ctx.accounts.canceller.key() == governance.authority || 
+            proposal.status == ProposalStatus::Active,
+            GovernanceError::Unauthorized
+        );
+
+        require!(reason.len() <= 256, GovernanceError::ReasonTooLong);
+
+        proposal.status = ProposalStatus::Cancelled;
+        proposal.cancellation_reason = Some(reason.clone());
+
+        emit!(ProposalCancelled {
+            governance: governance.key(),
+            proposal: proposal.key(),
+            proposal_id: proposal.proposal_id,
+            canceller: ctx.accounts.canceller.key(),
+            reason: reason.clone(),
+        });
+
+        msg!("Proposal {} cancelled: {}", proposal_id, reason);
+        Ok(())
+    }
+
+    pub fn emergency_pause(ctx: Context<EmergencyPause>) -> Result<()> {
+        let governance = &mut ctx.accounts.governance;
+
+        require!(
+            ctx.accounts.caller.key() == governance.authority,
+            GovernanceError::Unauthorized
+        );
+
+        governance.paused = true;
+
+        emit!(GovernancePaused {
+            governance: governance.key(),
+            paused_by: ctx.accounts.caller.key(),
+        });
+
+        msg!("Governance paused by authority");
+        Ok(())
+    }
+
+    pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
+        let governance = &mut ctx.accounts.governance;
+
+        // Only authority can unpause
+        require!(
+            ctx.accounts.caller.key() == governance.authority,
+            GovernanceError::Unauthorized
+        );
+
+        governance.paused = false;
+
+        emit!(GovernanceUnpaused {
+            governance: governance.key(),
+            unpaused_by: ctx.accounts.caller.key(),
+        });
+
+        msg!("Governance unpaused by authority");
+        Ok(())
+    }
 }
 
 
