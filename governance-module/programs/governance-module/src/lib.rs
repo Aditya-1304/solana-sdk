@@ -175,6 +175,57 @@ pub mod governance_module {
         msg!("Vote cast: {:?} with power: {}", vote_type, voting_power);
         Ok(())
     }
+
+    pub fn execute_proposal(
+        ctx: Context<ExecuteProposal>,
+        proposal_id: u64,
+    ) -> Result<()> {
+        let governance = &ctx.accounts.governance;
+        let proposal = &mut ctx.accounts.proposal;
+        let clock = Clock::get()?;
+
+        require!(proposal.status == ProposalStatus::Passed, GovernanceError::ProposalNotPassed);
+        require!(!proposal.executed, GovernanceError::AlreadyExecuted);
+
+        let execution_time = proposal.voting_end_time + (proposal.execution_delay_hours as i64 * 3600);
+
+        require!(
+            clock.unix_timestamp >= execution_time,
+            GovernanceError::ExecutionDelayNotMet
+        );
+
+        if !matches!(proposal.proposal_type, ProposalType::Emergency { .. }) {
+            require!(!governance.paused, GovernanceError::GovernancePaused);
+        }
+
+        match &proposal.proposal_type {
+            ProposalType::Treasury { recipient, amount, token_mint } => {
+                msg!("Executing treasury proposal: {} tokens to {}", amount, recipient);
+            },
+            ProposalType::ConfigChange { parameter, new_value } => {
+                msg!("Executing config change proposal: {} to {:?}", parameter, new_value);
+            },
+            ProposalType::Emergency { action } => {
+                msg!("Executing emergency action: {:?}", action);
+            },
+            ProposalType::Custom { target_program, instruction_data } => {
+                msg!("Executing custom proposal on program: {} with data: {:?}", target_program, instruction_data);
+            },
+        }
+
+        proposal.executed = true;
+        proposal.execution_time = Some(clock.unix_timestamp);
+
+        emit!(ProposalExecuted {
+            governance: governance.key(),
+            proposal: proposal.key(),
+            proposal_id: proposal.proposal_id,
+            executor: ctx.accounts.executor.key(),
+        });
+
+        msg!("Proposal {} executed successfully", proposal_id);
+        Ok(())
+    }
 }
 
 
@@ -219,7 +270,7 @@ pub struct Proposal {
     //Status
     pub status: ProposalStatus,
     pub executed: bool,
-    pub executed_at: Option<i64>,
+    pub execution_time: Option<i64>,
     pub cancellation_reason: Option<String>,
     pub bump: u8,
 }
@@ -275,7 +326,7 @@ pub enum ProposalType {
     },
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Debug)]
 pub enum EmergencyAction {
     Pause,
     Unpause,
