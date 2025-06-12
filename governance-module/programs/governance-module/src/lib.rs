@@ -4,7 +4,6 @@ declare_id!("HJzW17DkivXRYjirjDD56a3Pve6JFnKhmsfpswJQ3St4");
 
 #[program]
 pub mod governance_module {
-    use std::f32::consts::E;
 
     use super::*;
 
@@ -162,7 +161,7 @@ pub mod governance_module {
 
         proposal.unique_voters += 1;
 
-        self::check_and_finalize_proposal(proposal, governance)?;
+        check_and_finalize_proposal(proposal, governance)?;
 
         emit!(VoteCast {
             governance: governance.key(),
@@ -296,8 +295,73 @@ pub mod governance_module {
         msg!("Governance unpaused by authority");
         Ok(())
     }
+
+    pub fn update_governance_config(
+        ctx: Context<UpdateGovernanceConfig>,
+        proposal_id: u64,
+        new_config: GovernanceConfig,
+    )-> Result<()> {
+        let governance = &mut ctx.accounts.governance;
+        let proposal = &ctx.accounts.proposal;
+
+
+        require!(proposal.proposal_id == proposal_id, GovernanceError::InvalidProposal);
+        require!(proposal.status == ProposalStatus::Passed, GovernanceError::ProposalNotPassed);
+        require!(proposal.executed, GovernanceError::ProposalNotExecuted);
+        require!(
+            matches!(proposal.proposal_type, ProposalType::ConfigChange { .. }),
+            GovernanceError::InvalidProposalType
+        );
+
+
+        require!(new_config.quorum_percentage <= 100, GovernanceError::InvalidQuorum);
+        require!(new_config.voting_period_hours > 0, GovernanceError::InvalidProposalType);
+
+        let old_config = governance.config.clone();
+        governance.config = new_config;
+
+        emit!(GovernanceConfigUpdated {
+            governance: governance.key(),
+            proposal_id,
+            old_config,
+            new_config: governance.config.clone(),
+        });
+
+        msg!("Governance configuration updated via proposal {}", proposal_id);
+        Ok(())
+    }
 }
 
+
+//Helper function
+fn check_and_finalize_proposal(
+    proposal: &mut Account<Proposal>,
+    governance: &Account<Governance>,
+) -> Result<()> {
+    let total_votes = proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
+
+    let required_quorum = match governance.config.voting_type {
+        VotingType::Equal => {
+            governance.config.quorum_percentage as u64
+        },
+        VotingType::TokenWeighted => {
+            (governance.total_voting_power * governance.config.quorum_percentage as u64) / 100
+        }
+    };
+
+    if total_votes >= required_quorum.max(1) {
+       if proposal.votes_for > proposal.votes_against {
+            proposal.status = ProposalStatus::Passed;
+            msg!("Proposal {} passed! For: {}, Against: {}", 
+                 proposal.proposal_id, proposal.votes_for, proposal.votes_against);
+        } else {
+            proposal.status = ProposalStatus::Failed;
+            msg!("Proposal {} failed! For: {}, Against: {}", 
+                 proposal.proposal_id, proposal.votes_for, proposal.votes_against);
+        }
+    }
+    Ok(())
+}
 
 #[account]
 pub struct Governance {
