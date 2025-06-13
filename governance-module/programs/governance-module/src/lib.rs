@@ -421,14 +421,27 @@ pub struct VoteRecord {
     pub bump: u8,
 }
 
+#[account]
+pub struct VotingDelegation {
+    pub delegator: Pubkey,
+    pub delegate: Pubkey,
+    pub amount: u64,
+    pub created_at: i64,
+    pub active: bool,
+    pub bump: u8,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq)]
 pub struct GovernanceConfig {
     pub voting_type: VotingType,
+    pub governance_token: Option<Pubkey>,
     pub quorum_percentage: u8,
     pub voting_period_hours: u32,
     pub execution_delay_hours: u32,
     pub min_voting_power_to_propose: u64,
     pub proposal_deposit: u64,
+    pub voting_power_multiplier: Option<u64>,
+    pub total_supply: Option<u64>
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq)]
