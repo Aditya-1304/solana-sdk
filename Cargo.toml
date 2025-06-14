@@ -3,6 +3,7 @@ members = [
     "token-module/programs/token-module",
     "multisig-module/programs/multisig-module",
     "common-utils/programs/common-utils",
+    "governance-module/programs/governance-module",
 ]
 
 resolver = "2"
