@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
 declare_id!("HJzW17DkivXRYjirjDD56a3Pve6JFnKhmsfpswJQ3St4");
 
@@ -20,6 +21,18 @@ pub mod governance_module {
         require!(description.len() <= 256, GovernanceError::DescriptionTooLong);
         require!(config.quorum_percentage <= 100, GovernanceError::InvalidQuorum);
         require!(config.voting_period_hours > 0, GovernanceError::InvalidVotingPeriod);
+        require!(config.execution_delay_hours >= 1, GovernanceError::InvalidExecutionDelay);
+
+        if let Some(governance_token) = config.governance_token {
+            require!(
+                ctx.accounts.governance_token.is_some(),
+                GovernanceError::MissingGovernanceToken
+            );
+            require!(
+                ctx.accounts.governance_token.as_ref().unwrap().key() == governance_token,
+                GovernanceError::InvalidGovernanceToken
+            )
+        }
 
         governance.authority = ctx.accounts.authority.key();
         governance.name = name;
@@ -60,18 +73,7 @@ pub mod governance_module {
         require!(!instruction_data.is_empty(), GovernanceError::EmptyInstruction);
         require!(instruction_data.len() <= 1232, GovernanceError::InstructionTooLarge);
 
-        let proposer_voting_power = match governance.config.voting_type {
-            VotingType::Equal => 1,
-            VotingType::TokenWeighted => {
-
-                governance.config.min_voting_power_to_propose.max(1)
-            }
-        };
-
-        require!(
-            proposer_voting_power >= governance.config.min_voting_power_to_propose,
-            GovernanceError::InsufficientVotingPower
-        );
+    
 
         proposal.governance = governance.key();
         proposal.proposal_id = governance.proposal_count;
@@ -511,6 +513,8 @@ pub struct CreateGovernance<'info> {
         bump,
     )]
     pub governance: Account<'info, Governance>,
+
+    pub governance_token: Option<InterfaceAccount<'info, Mint>>,
     pub system_program: Program<'info, System>,
 }
 
@@ -554,6 +558,8 @@ pub struct CreateProposal<'info> {
         bump,
     )]
     pub proposal: Account<'info, Proposal>,
+
+    pub proposer_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
     pub system_program: Program<'info, System>,
 }
 
@@ -592,6 +598,8 @@ pub struct Vote<'info> {
     )]
     pub vote_record: Account<'info, VoteRecord>,
 
+    pub voter_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -608,6 +616,52 @@ pub struct ExecuteProposal<'info> {
         bump = proposal.bump,
     )]
     pub proposal: Account<'info, Proposal>,
+}
+
+#[derive(Accounts)]
+#[instruction(proposal_id: u64)]
+pub struct ExecuteTreasuryTokenTransfer<'info> {
+    #[account(
+        mut
+    )]
+    pub governance: Account<'info, Governance>,
+
+    #[account(
+        seeds = [b"proposal",governance.key().as_ref(), &proposal_id.to_le_bytes()],
+        bump = proposal.bump,
+    )]
+    pub proposal: Account<'info, Proposal>,
+
+    #[account(
+        mut
+    )]
+    pub treasury_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        mut
+    )]
+    pub recipient_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+#[instruction(proposal_id: u64)]
+pub struct ExecuteTreasurySolTransfer<'info> {
+    #[account(mut)]
+    pub governance: Account<'info, Governance>,
+
+    #[account(
+        seeds = [b"proposal", governance.key().as_ref(), &proposal_id.to_le_bytes()],
+        bump = proposal.bump
+    )]
+    pub proposal: Account<'info, Proposal>,
+
+    ///CHECK: Recipient account for SOL transfer
+    #[account(mut)]
+    pub recipient: AccountInfo<'info>,
+
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -652,6 +706,24 @@ pub struct UpdateGovernanceConfig<'info> {
         bump = governance.bump,
     )]
     pub proposal: Account<'info, Proposal>,
+}
+
+#[derive(Accounts)]
+pub struct DelegateVotingPower<'info> {
+
+    #[account(mut)]
+    pub delegator: Signer<'info>,
+
+    #[account(
+        init,
+        payer = delegator,
+        space = 8 + 32 + 32 + 8 + 8 + 1 + 1,
+        seeds = [b"delegation", delegator.key().as_ref()],
+        bump,
+    )]
+    pub delegation: Account<'info, VotingDelegation>,
+
+    pub system_program: Program<'info, System>,
 }
 
 #[event]
@@ -728,6 +800,8 @@ pub enum GovernanceError {
     InvalidQuorum,
     #[msg("Invalid voting period")]
     InvalidVotingPeriod,
+    #[msg("Invalid execution delay")]
+    InvalidExecutionDelay,
     #[msg("Governance is paused")]
     GovernancePaused,
     #[msg("Title too long")]
@@ -760,4 +834,22 @@ pub enum GovernanceError {
     ProposalNotExecuted,
     #[msg("Invalid proposal type")]
     InvalidProposalType,
+    #[msg("Missing governance token")]
+    MissingGovernanceToken,
+    #[msg("Invalid governance token")]
+    InvalidGovernanceToken,
+    #[msg("Invalid token account")]
+    InvalidTokenAccount,
+    #[msg("Invalid token account owner")]
+    InvalidTokenAccountOwner,
+    #[msg("Voting power overflow")]
+    VotingPowerOverflow,
+    #[msg("Invalid treasury amount")]
+    InvalidTreasuryAmount,
+    #[msg("Empty config parameter")]
+    EmptyConfigParameter,
+    #[msg("Empty config value")]
+    EmptyConfigValue,
+    #[msg("Insufficient treasury funds")]
+    InsufficientTreasuryFunds,
 }
