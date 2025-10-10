@@ -73,7 +73,19 @@ pub mod governance_module {
         require!(!instruction_data.is_empty(), GovernanceError::EmptyInstruction);
         require!(instruction_data.len() <= 1232, GovernanceError::InstructionTooLarge);
 
-    
+        let proposer_voting_power = Self::get_voting_power(
+            &ctx.accounts.proposer.key(),
+            &governance.config,
+            ctx.accounts.proposer_token_account.as_ref(),
+        )?;
+
+        require!(
+            proposer_voting_power >= governance.config.min_voting_power_to_propose,
+            GovernanceError::InsufficientVotingPower
+        );
+
+        Self::validate_proposal_type(&proposal_type, &instruction_data)?;
+
 
         proposal.governance = governance.key();
         proposal.proposal_id = governance.proposal_count;
@@ -136,14 +148,11 @@ pub mod governance_module {
 
         require!(!governance.paused, GovernanceError::GovernancePaused);
 
-        let voting_power = match governance.config.voting_type {
-            VotingType::Equal => 1u64,
-            VotingType::TokenWeighted => {
-
-
-                10u64 // Placeholder for token-weighted voting power logic
-            }
-        };
+        let voting_power = Self::get_voting_power(
+            &ctx.accounts.voter.key(),
+            &governance.config,
+            ctx.accounts.voter_token_account.as_ref(),
+        );
 
         require!(voting_power > 0, GovernanceError::NoVotingPower);
 
@@ -153,6 +162,7 @@ pub mod governance_module {
         vote_record.vote_type = vote_type.clone();
         vote_record.voting_power = voting_power as i64;
         vote_record.timestamp = clock.unix_timestamp;
+        vote_record.delagated_from = None;
         vote_record.bump = ctx.bumps.vote_record;
 
         match vote_type {
@@ -199,6 +209,9 @@ pub mod governance_module {
             require!(!governance.paused, GovernanceError::GovernancePaused);
         }
 
+        Self::execute_proposal_instruction(proposal, &ctx.remaining_accounts, &governance.key())?;
+
+
         match &proposal.proposal_type {
             ProposalType::Treasury { recipient, amount, token_mint } => {
                 msg!("Executing treasury proposal: {} tokens to {}", amount, recipient);
@@ -228,6 +241,7 @@ pub mod governance_module {
         Ok(())
     }
 
+    
     pub fn cancel_proposal(
         ctx: Context<CancelProposal>,
         proposal_id: u64,
