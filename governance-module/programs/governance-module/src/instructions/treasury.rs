@@ -190,7 +190,7 @@ pub struct ExecuteTreasurySolTransfer<'info> {
 
     #[account(
         seeds = [b"treasury", governance.key().as_ref()],
-        bump = treasury.bump,
+        bump,
     )]
     pub treasury: Account<'info, Treasury>,
 
@@ -224,7 +224,7 @@ pub struct ExecuteTreasuryTokenTransfer<'info> {
 
     #[account(
         seeds = [b"treasury", governance.key().as_ref()],
-        bump = treasury.bump,
+        bump,
     )]
     pub treasury: Account<'info, Treasury>,
 

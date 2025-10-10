@@ -76,4 +76,6 @@ pub enum GovernanceError {
     InvalidTreasuryToken,
     #[msg("Proposal queue full")]
     ProposalQueueFull,
+    #[msg("Invalid recipient")]
+    InvalidRecipient,
 }

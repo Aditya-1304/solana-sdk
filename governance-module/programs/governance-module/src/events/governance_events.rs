@@ -86,3 +86,12 @@ pub struct TreasuryInitialized {
     pub treasury: Pubkey,
     pub token_mint: Option<Pubkey>,
 }
+
+#[event]
+pub struct TreasuryWithdrawal {
+    pub governance: Pubkey,
+    pub proposal_id: u64,
+    pub recipient: Pubkey,
+    pub amount: u64,
+    pub token_mint: Option<Pubkey>,
+}
