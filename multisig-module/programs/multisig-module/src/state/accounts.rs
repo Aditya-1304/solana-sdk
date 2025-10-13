@@ -13,6 +13,7 @@ pub enum TransactionType {
 }
 
 
+
 #[derive(Accounts)]
 #[instruction(owners: Vec<Pubkey>, threshold: u8)]  
 pub struct CreateMultisig<'info> {
@@ -22,7 +23,7 @@ pub struct CreateMultisig<'info> {
     #[account(
         init,
         payer = creator,
-        space = 8 + Multisig::INIT_SPACE,
+        space = 8 + Multisig::INIT_SPACE + 8, // Added extra buffer for discriminator alignment
         seeds = [b"multisig", creator.key().as_ref()],
         bump,
     )]
@@ -37,19 +38,13 @@ pub struct ProposeTransaction<'info> {
     #[account(mut)]
     pub proposer: Signer<'info>,
 
-    #[account(
-        mut,
-        // seeds = [b"multisig", multisig.owners[0].as_ref()],
-        // bump = multisig.bump,
-
-        // We will derive the multisig seed at client side
-    )]
+    #[account(mut)]
     pub multisig: Account<'info, Multisig>,
 
     #[account(
         init,
         payer = proposer,
-        space = 8 + Transaction::INIT_SPACE,
+        space = 8 + Transaction::INIT_SPACE + 8, // Added extra buffer
         seeds = [
             b"transaction",
             multisig.key().as_ref(),
@@ -60,7 +55,6 @@ pub struct ProposeTransaction<'info> {
     pub transaction: Account<'info, Transaction>,
 
     pub system_program: Program<'info, System>,
-
 }
 
 #[derive(Accounts)]
@@ -186,6 +180,7 @@ pub struct Multisig {
     pub nonce: u64,
     pub last_proposal_slot: u64,
 }
+
 impl Multisig {
     pub fn validate_state(&self) -> Result<()> {
         require!(!self.owners.is_empty(), MultisigError::NoOwners);
