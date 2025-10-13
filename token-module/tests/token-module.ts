@@ -573,16 +573,40 @@ describe("token-module", () => {
       const user1InitialBalance = (await getAccount(provider.connection, user1Ata)).amount;
       const mintInitialSupply = (await getMint(provider.connection, mintKeypair.publicKey)).supply;
 
-      await program.methods
-        .burnTokens(burnAmount)
-        .accounts({
-          owner: user1Keypair.publicKey,
-          mint: mintKeypair.publicKey,
-          tokenAccount: user1Ata,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .signers([user1Keypair])
-        .rpc({ commitment: "confirmed" });
+      // Add retry logic and proper confirmation
+      let retries = 3;
+      let success = false;
+
+      while (retries > 0 && !success) {
+        try {
+          await program.methods
+            .burnTokens(burnAmount)
+            .accounts({
+              owner: user1Keypair.publicKey,
+              mint: mintKeypair.publicKey,
+              tokenAccount: user1Ata,
+              tokenProgram: TOKEN_PROGRAM_ID,
+            })
+            .signers([user1Keypair])
+            .rpc({
+              commitment: "confirmed",
+              skipPreflight: false,
+            });
+
+          success = true;
+        } catch (error: any) {
+          if (error.message?.includes("Blockhash not found") && retries > 1) {
+            console.log(`Blockhash expired, retrying... (${retries - 1} attempts left)`);
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+            retries--;
+          } else {
+            throw error;
+          }
+        }
+      }
+
+      // Add a small delay to ensure the transaction is fully processed
+      await new Promise(resolve => setTimeout(resolve, 500));
 
       const user1AtaInfoAfter = await getAccount(provider.connection, user1Ata);
       const mintInfoAfter = await getMint(provider.connection, mintKeypair.publicKey);
